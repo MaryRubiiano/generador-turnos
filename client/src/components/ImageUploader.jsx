@@ -2,6 +2,9 @@ import { useState, useRef } from 'react'
 import { Upload, Image, Loader2, X, Plus } from 'lucide-react'
 import axios from 'axios'
 
+// ⚠️ IMPORTANTE: Esta línea obtiene la URL del backend de las variables de entorno
+const API_URL = import.meta.env.VITE_API_URL || '';
+
 export default function ImageUploader({ onAnalysisComplete, onError }) {
   const [files, setFiles] = useState([])
   const [previews, setPreviews] = useState([])
@@ -68,7 +71,8 @@ export default function ImageUploader({ onAnalysisComplete, onError }) {
         formData.append('images', file)
       }
 
-      const response = await axios.post('/api/analyze', formData, {
+      // ✅ LÍNEA CRÍTICA: Usar la URL completa del backend
+      const response = await axios.post(`${API_URL}/api/analyze`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 600000, // 10 min timeout para Opus 4.6 con pensamiento extendido
       })
