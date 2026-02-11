@@ -1,0 +1,275 @@
+Excel mary data
+
+-- ============================================
+-- SUPABASE SETUP - Generador de Turnos
+-- Ejecutar en Supabase SQL Editor
+-- ============================================
+
+-- 1. Tabla de Campañas
+CREATE TABLE IF NOT EXISTS campanas (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  nombre TEXT NOT NULL UNIQUE,
+  contrato TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Tabla de Supervisores
+CREATE TABLE IF NOT EXISTS supervisores (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  nombre TEXT NOT NULL,
+  cedula TEXT UNIQUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. Tabla de Agentes (la principal)
+CREATE TABLE IF NOT EXISTS agentes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  cedula TEXT NOT NULL UNIQUE,
+  nombre TEXT NOT NULL,
+  campana TEXT NOT NULL,
+  supervisor TEXT NOT NULL,
+  contrato TEXT,
+  activo BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. Tabla de alias/nombres parciales para matching
+-- Esto permite que "Jesus Magallanes" matchee con "Marcial de Jesus Magallanes"
+CREATE TABLE IF NOT EXISTS agentes_alias (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  agente_id UUID REFERENCES agentes(id) ON DELETE CASCADE,
+  alias TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Índices para búsquedas rápidas
+CREATE INDEX IF NOT EXISTS idx_agentes_cedula ON agentes(cedula);
+CREATE INDEX IF NOT EXISTS idx_agentes_nombre ON agentes(nombre);
+CREATE INDEX IF NOT EXISTS idx_agentes_campana ON agentes(campana);
+CREATE INDEX IF NOT EXISTS idx_agentes_activo ON agentes(activo);
+CREATE INDEX IF NOT EXISTS idx_agentes_alias_alias ON agentes_alias(alias);
+
+-- 6. Función para buscar agente por nombre parcial (fuzzy match)
+CREATE OR REPLACE FUNCTION buscar_agente(nombre_parcial TEXT)
+RETURNS TABLE (
+  id UUID,
+  cedula TEXT,
+  nombre TEXT,
+  campana TEXT,
+  supervisor TEXT,
+  contrato TEXT,
+  score REAL
+) AS $$
+BEGIN
+  RETURN QUERY
+  -- Búsqueda exacta en alias
+  SELECT a.id, a.cedula, a.nombre, a.campana, a.supervisor, a.contrato, 1.0::REAL AS score
+  FROM agentes a
+  JOIN agentes_alias al ON al.agente_id = a.id
+  WHERE a.activo = TRUE
+    AND LOWER(al.alias) = LOWER(nombre_parcial)
+
+  UNION ALL
+
+  -- Búsqueda por similitud en nombre completo
+  SELECT a.id, a.cedula, a.nombre, a.campana, a.supervisor, a.contrato,
+    similarity(LOWER(a.nombre), LOWER(nombre_parcial))::REAL AS score
+  FROM agentes a
+  WHERE a.activo = TRUE
+    AND similarity(LOWER(a.nombre), LOWER(nombre_parcial)) > 0.25
+
+  UNION ALL
+
+  -- Búsqueda por contención (el nombre parcial está contenido en el nombre completo)
+  SELECT a.id, a.cedula, a.nombre, a.campana, a.supervisor, a.contrato, 0.8::REAL AS score
+  FROM agentes a
+  WHERE a.activo = TRUE
+    AND LOWER(a.nombre) LIKE '%' || LOWER(nombre_parcial) || '%'
+
+  ORDER BY score DESC
+  LIMIT 1;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 7. Habilitar extensión pg_trgm para búsquedas fuzzy (similarity)
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- 8. Trigger para actualizar updated_at automáticamente
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_agentes_updated_at
+  BEFORE UPDATE ON agentes
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at();
+
+-- 9. Row Level Security (RLS) - básico
+ALTER TABLE agentes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agentes_alias ENABLE ROW LEVEL SECURITY;
+ALTER TABLE campanas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE supervisores ENABLE ROW LEVEL SECURITY;
+
+-- Política para permitir acceso con service_role key (backend)
+CREATE POLICY "Service role full access agentes" ON agentes FOR ALL USING (TRUE) WITH CHECK (TRUE);
+CREATE POLICY "Service role full access alias" ON agentes_alias FOR ALL USING (TRUE) WITH CHECK (TRUE);
+CREATE POLICY "Service role full access campanas" ON campanas FOR ALL USING (TRUE) WITH CHECK (TRUE);
+CREATE POLICY "Service role full access supervisores" ON supervisores FOR ALL USING (TRUE) WITH CHECK (TRUE);
+
+-- ============================================
+-- DATOS INICIALES
+-- ============================================
+
+-- Insertar supervisores
+INSERT INTO supervisores (nombre) VALUES
+  ('Mary Luz Rubiano')
+ON CONFLICT DO NOTHING;
+
+-- Insertar campañas
+INSERT INTO campanas (nombre) VALUES
+  ('Corficolombiana'),
+  ('AVC-ATH')
+ON CONFLICT (nombre) DO NOTHING;
+
+-- Insertar agentes
+INSERT INTO agentes (cedula, nombre, campana, supervisor, contrato) VALUES
+  ('1007565415', 'CRISTIAN MATEO PATAQUIVA BELLO', 'Corficolombiana', 'Mary Luz Rubiano', NULL),
+  ('1192831972', 'LEX LILIANA RIOS', 'Corficolombiana', 'Mary Luz Rubiano', NULL),
+  ('1052040123', 'MARCIAL DE JESUS MAGALLANES', 'Corficolombiana', 'Mary Luz Rubiano', NULL),
+  ('1019045162', 'GUSTAVO ANDRES SARMIENTO', 'AVC-ATH', 'Mary Luz Rubiano', NULL),
+  ('1001346822', 'JUAN DAVID ROLDAN', 'AVC-ATH', 'Mary Luz Rubiano', NULL),
+  ('1020795408', 'CAMILO ANDRES HURTADO', 'AVC-ATH', 'Mary Luz Rubiano', NULL),
+  ('1023163078', 'JUAN SEBASTIAN GUTIERREZ GONZALEZ', 'AVC-ATH', 'Mary Luz Rubiano', NULL)
+ON CONFLICT (cedula) DO UPDATE SET
+  nombre = EXCLUDED.nombre,
+  campana = EXCLUDED.campana,
+  supervisor = EXCLUDED.supervisor;
+
+-- Insertar alias para matching con nombres parciales de las imágenes
+INSERT INTO agentes_alias (agente_id, alias) VALUES
+  -- Cristian Mateo Pataquiva
+  ((SELECT id FROM agentes WHERE cedula = '1007565415'), 'Cristian Mateo Pataquiva'),
+  ((SELECT id FROM agentes WHERE cedula = '1007565415'), 'Cristian Pataquiva'),
+  ((SELECT id FROM agentes WHERE cedula = '1007565415'), 'Pataquiva'),
+  -- Lex Liliana Rios
+  ((SELECT id FROM agentes WHERE cedula = '1192831972'), 'Lex Liliana Rios'),
+  ((SELECT id FROM agentes WHERE cedula = '1192831972'), 'Lex Rios'),
+  ((SELECT id FROM agentes WHERE cedula = '1192831972'), 'Liliana Rios'),
+  -- Marcial de Jesus Magallanes
+  ((SELECT id FROM agentes WHERE cedula = '1052040123'), 'Jesus Magallanes'),
+  ((SELECT id FROM agentes WHERE cedula = '1052040123'), 'Marcial Magallanes'),
+  ((SELECT id FROM agentes WHERE cedula = '1052040123'), 'Magallanes'),
+  -- Gustavo Andres Sarmiento
+  ((SELECT id FROM agentes WHERE cedula = '1019045162'), 'Gustavo Sarmiento'),
+  ((SELECT id FROM agentes WHERE cedula = '1019045162'), 'Gustavo Andres Sarmiento'),
+  ((SELECT id FROM agentes WHERE cedula = '1019045162'), 'Sarmiento'),
+  -- Juan David Roldan
+  ((SELECT id FROM agentes WHERE cedula = '1001346822'), 'Juan Roldan'),
+  ((SELECT id FROM agentes WHERE cedula = '1001346822'), 'Juan David Roldan'),
+  ((SELECT id FROM agentes WHERE cedula = '1001346822'), 'Roldan'),
+  -- Camilo Andres Hurtado
+  ((SELECT id FROM agentes WHERE cedula = '1020795408'), 'Camilo Hurtado'),
+  ((SELECT id FROM agentes WHERE cedula = '1020795408'), 'Camilo Andres Hurtado'),
+  ((SELECT id FROM agentes WHERE cedula = '1020795408'), 'Hurtado'),
+  -- Juan Sebastian Gutierrez Gonzalez
+  ((SELECT id FROM agentes WHERE cedula = '1023163078'), 'Juan Gutierrez'),
+  ((SELECT id FROM agentes WHERE cedula = '1023163078'), 'Juan Sebastian Gutierrez'),
+  ((SELECT id FROM agentes WHERE cedula = '1023163078'), 'Gutierrez Gonzalez'),
+  ((SELECT id FROM agentes WHERE cedula = '1023163078'), 'Gutierrez');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  -- ============================================
+-- SUPABASE MIGRATION - Historial de Análisis
+-- ============================================
+
+-- 1. Tabla de historial de análisis
+CREATE TABLE IF NOT EXISTS analisis_historial (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id TEXT, -- Opcional: si quieres multi-usuario en el futuro
+  
+  -- Metadata del análisis
+  supervisor TEXT,
+  campana TEXT,
+  semana TEXT,
+  fecha_inicio DATE,
+  fecha_fin DATE,
+  
+  -- Estadísticas
+  total_agentes INTEGER DEFAULT 0,
+  total_turnos INTEGER DEFAULT 0,
+  total_descansos INTEGER DEFAULT 0,
+  total_splits INTEGER DEFAULT 0,
+  
+  -- Archivos (rutas en Supabase Storage)
+  imagenes_paths TEXT[], -- Array de rutas de las imágenes subidas
+  formato_turnos_path TEXT, -- Ruta del Excel Formato Turnos
+  plantilla_prometeo_path TEXT, -- Ruta del Excel Plantilla Prometeo
+  
+  -- Timestamps
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Índices
+CREATE INDEX IF NOT EXISTS idx_analisis_created_at ON analisis_historial(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analisis_user_id ON analisis_historial(user_id);
+
+-- 3. Trigger para updated_at
+CREATE TRIGGER trigger_analisis_updated_at
+  BEFORE UPDATE ON analisis_historial
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at();
+
+-- 4. Row Level Security
+ALTER TABLE analisis_historial ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role full access analisis" 
+  ON analisis_historial FOR ALL 
+  USING (TRUE) 
+  WITH CHECK (TRUE);
+
+-- 5. Crear buckets en Supabase Storage
+-- Nota: Esto se debe hacer desde el dashboard de Supabase o via API
+-- INSERT INTO storage.buckets (id, name, public) VALUES 
+--   ('analisis-imagenes', 'analisis-imagenes', true),
+--   ('analisis-excels', 'analisis-excels', true);
+
+-- ============================================
+-- QUERIES ÚTILES
+-- ============================================
+
+-- Ver historial reciente
+-- SELECT 
+--   id,
+--   supervisor,
+--   campana,
+--   semana,
+--   total_agentes,
+--   total_turnos,
+--   created_at,
+--   array_length(imagenes_paths, 1) as num_imagenes
+-- FROM analisis_historial
+-- ORDER BY created_at DESC
+-- LIMIT 20;
+
+-- Eliminar análisis antiguo (ejemplo)
+-- DELETE FROM analisis_historial WHERE created_at < NOW() - INTERVAL '90 days';
