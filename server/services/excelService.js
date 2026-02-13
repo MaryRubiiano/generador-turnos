@@ -1,482 +1,448 @@
-import { useState, useMemo } from 'react'
-import { Check, ChevronLeft, Loader2, Plus, Trash2, Edit3, Save, AlertTriangle, Users, CalendarDays } from 'lucide-react'
-import axios from 'axios'
+const ExcelJS = require("exceljs");
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+// ============================================
+// HELPERS
+// ============================================
 
-export default function DataReview({ data, onConfirm, onBack, onError }) {
-  const [metadata, setMetadata] = useState(data.metadata || {})
-  const [turnos, setTurnos] = useState(data.turnos || [])
-  const [isGenerating, setIsGenerating] = useState(false)
-  const [editingRow, setEditingRow] = useState(null)
-
-  // Stats
-  const stats = useMemo(() => {
-    const agentes = new Set(turnos.map(t => t.cedula)).size
-    const dias = new Set(turnos.map(t => t.fecha)).size
-    const descansos = turnos.filter(t => t.esDescanso).length
-    const splits = turnos.filter(t => t.esSplit).length
-    const incapacidades = turnos.filter(t => t.esIncapacidad).length
-    const warnings = turnos.filter(t =>
-      (t.nombre || '').includes('???') ||
-      (t.cedula || '').includes('???') ||
-      (t.horaInicio || '').includes('???')
-    ).length
-    return { agentes, dias, descansos, splits, incapacidades, warnings, total: turnos.length }
-  }, [turnos])
-
-  // Agrupar turnos por agente
-  const turnosByAgent = useMemo(() => {
-    const grouped = {}
-    for (const turno of turnos) {
-      const key = turno.cedula || turno.nombre
-      if (!grouped[key]) grouped[key] = []
-      grouped[key].push(turno)
-    }
-    return grouped
-  }, [turnos])
-
-  const updateTurno = (index, field, value) => {
-    setTurnos(prev => {
-      const updated = [...prev]
-      updated[index] = { ...updated[index], [field]: value }
-
-      // Si se marca como incapacidad, limpiar horas y desmarcar descanso
-      if (field === 'esIncapacidad' && value === true) {
-        updated[index].esDescanso = false
-        updated[index].esSplit = false
-        updated[index].horaInicio = null
-        updated[index].horaFin = null
-        updated[index].almuerzo = null
-        updated[index].splitHoraInicio2 = null
-        updated[index].splitHoraFin2 = null
-        if (!updated[index].motivoAusencia) {
-          updated[index].motivoAusencia = 'Incapacidad'
-        }
-      }
-
-      // Si se desmarca incapacidad, limpiar motivo
-      if (field === 'esIncapacidad' && value === false) {
-        updated[index].motivoAusencia = null
-      }
-
-      // Si se marca como descanso, desmarcar incapacidad
-      if (field === 'esDescanso' && value === true) {
-        updated[index].esIncapacidad = false
-        updated[index].motivoAusencia = null
-      }
-
-      return updated
-    })
-  }
-
-  const deleteTurno = (index) => {
-    setTurnos(prev => prev.filter((_, i) => i !== index))
-  }
-
-  const addTurno = () => {
-    const newTurno = {
-      cedula: '',
-      nombre: '',
-      fecha: metadata.fechaInicio || '',
-      diaSemana: '',
-      horaInicio: '07:00',
-      horaFin: '17:00',
-      esDescanso: false,
-      esIncapacidad: false,
-      motivoAusencia: null,
-      esSplit: false,
-      splitHoraInicio2: null,
-      splitHoraFin2: null,
-      almuerzo: '12:00 - 13:00',
-      campana: metadata.campana || '',
-      jornada: '07:00 - 17:00 D 1h',
-    }
-    setTurnos(prev => [...prev, newTurno])
-    setEditingRow(turnos.length)
-  }
-
-  const handleGenerate = async () => {
-    setIsGenerating(true)
-    onError(null)
-
-    try {
-      const response = await axios.post(`${API_URL}/api/generate`, {
-        scheduleData: turnos,
-        metadata,
-        imagenesPaths: data.imagenesPaths || [],
-      })
-
-      if (response.data.success) {
-        onConfirm(response.data.files)
-      } else {
-        onError(response.data.error || 'Error generando los archivos')
-      }
-    } catch (err) {
-      const message = err.response?.data?.error || err.message
-      onError(message)
-    } finally {
-      setIsGenerating(false)
-    }
-  }
-
-  return (
-    <div className="animate-fade-in space-y-6">
-      {/* Metadata Section */}
-      <div className="glass-card p-6">
-        <h2 className="font-display font-bold text-lg text-surface-100 mb-4 flex items-center gap-2">
-          <Edit3 className="w-5 h-5 text-brand-400" />
-          Información General
-        </h2>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-xs font-mono text-surface-400 mb-1.5">Supervisor / Líder</label>
-            <input
-              type="text"
-              value={metadata.supervisor || ''}
-              onChange={(e) => setMetadata(prev => ({ ...prev, supervisor: e.target.value }))}
-              className="input-field"
-              placeholder="Nombre del supervisor"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-mono text-surface-400 mb-1.5">Campaña</label>
-            <input
-              type="text"
-              value={metadata.campana || ''}
-              onChange={(e) => setMetadata(prev => ({ ...prev, campana: e.target.value }))}
-              className="input-field"
-              placeholder="Nombre de la campaña"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-mono text-surface-400 mb-1.5">Contrato</label>
-            <input
-              type="text"
-              value={metadata.contrato || ''}
-              onChange={(e) => setMetadata(prev => ({ ...prev, contrato: e.target.value }))}
-              className="input-field"
-              placeholder="Código del contrato"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-mono text-surface-400 mb-1.5">Semana</label>
-            <input
-              type="text"
-              value={metadata.semana || ''}
-              onChange={(e) => setMetadata(prev => ({ ...prev, semana: e.target.value }))}
-              className="input-field"
-              placeholder="del X al Y de mes"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
-        {[
-          { label: 'Agentes', value: stats.agentes, icon: <Users className="w-4 h-4" />, color: 'text-brand-400' },
-          { label: 'Días', value: stats.dias, icon: <CalendarDays className="w-4 h-4" />, color: 'text-blue-400' },
-          { label: 'Turnos', value: stats.total, icon: '📋', color: 'text-surface-200' },
-          { label: 'Descansos', value: stats.descansos, icon: '😴', color: 'text-amber-400' },
-          { label: 'Split', value: stats.splits, icon: '⏰', color: 'text-purple-400' },
-          { label: 'Incapacidad', value: stats.incapacidades, icon: '🏥', color: 'text-orange-400' },
-          { label: 'Advertencias', value: stats.warnings, icon: <AlertTriangle className="w-4 h-4" />, color: stats.warnings > 0 ? 'text-red-400' : 'text-emerald-400' },
-        ].map((s) => (
-          <div key={s.label} className="glass-card-light p-3 text-center">
-            <div className={`flex items-center justify-center gap-1.5 mb-1 ${s.color}`}>
-              {typeof s.icon === 'string' ? <span>{s.icon}</span> : s.icon}
-              <span className="font-display font-bold text-xl">{s.value}</span>
-            </div>
-            <span className="text-xs text-surface-500 font-mono">{s.label}</span>
-          </div>
-        ))}
-      </div>
-
-      {stats.warnings > 0 && (
-        <div className="glass-card border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm text-amber-300 font-medium">
-              Se encontraron {stats.warnings} campos con datos inciertos (marcados con ???)
-            </p>
-            <p className="text-xs text-surface-400 mt-1">
-              Revisa y corrige los campos resaltados en rojo antes de generar los archivos.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {stats.incapacidades > 0 && (
-        <div className="glass-card border-orange-500/30 bg-orange-500/5 p-4 flex items-start gap-3">
-          <span className="text-lg shrink-0">🏥</span>
-          <div>
-            <p className="text-sm text-orange-300 font-medium">
-              Se detectaron {stats.incapacidades} día(s) de incapacidad/ausencia
-            </p>
-            <p className="text-xs text-surface-400 mt-1">
-              Estos días se marcarán como no laborados en los archivos Excel con el motivo correspondiente.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Data Table */}
-      <div className="glass-card overflow-hidden">
-        <div className="flex items-center justify-between p-4 border-b border-surface-800/50">
-          <h2 className="font-display font-bold text-lg text-surface-100">
-            Turnos Extraídos ({turnos.length})
-          </h2>
-          <button onClick={addTurno} className="btn-secondary flex items-center gap-2 text-sm">
-            <Plus className="w-4 h-4" />
-            Agregar turno
-          </button>
-        </div>
-
-        <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
-          <table className="w-full min-w-[1300px]">
-            <thead className="sticky top-0 z-10 bg-surface-900/95 backdrop-blur">
-              <tr className="text-xs font-mono text-surface-400 uppercase tracking-wider">
-                <th className="table-cell text-left w-10">#</th>
-                <th className="table-cell text-left">Cédula</th>
-                <th className="table-cell text-left">Nombre</th>
-                <th className="table-cell text-left">Fecha</th>
-                <th className="table-cell text-left">Día</th>
-                <th className="table-cell text-center">Inicio</th>
-                <th className="table-cell text-center">Fin</th>
-                <th className="table-cell text-center">Almuerzo</th>
-                <th className="table-cell text-center">Split</th>
-                <th className="table-cell text-center">Descanso</th>
-                <th className="table-cell text-center">Incap.</th>
-                <th className="table-cell text-center">Motivo</th>
-                <th className="table-cell text-center">Campaña</th>
-                <th className="table-cell text-center w-20">Acc.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {turnos.map((turno, idx) => {
-                const isEditing = editingRow === idx
-                const hasWarning = (turno.nombre || '').includes('???') ||
-                  (turno.cedula || '').includes('???') ||
-                  (turno.horaInicio || '').includes('???')
-                const isIncapacidad = turno.esIncapacidad
-
-                return (
-                  <tr
-                    key={idx}
-                    className={`transition-colors ${
-                      isIncapacidad ? 'bg-orange-500/5' :
-                      hasWarning ? 'bg-red-500/5' :
-                      turno.esDescanso ? 'bg-amber-500/5' :
-                      idx % 2 === 0 ? 'bg-transparent' : 'bg-surface-900/20'
-                    } hover:bg-surface-800/30`}
-                  >
-                    <td className="table-cell text-surface-500 font-mono text-xs">{idx + 1}</td>
-
-                    <td className="table-cell">
-                      <input
-                        type="text"
-                        value={turno.cedula || ''}
-                        onChange={(e) => updateTurno(idx, 'cedula', e.target.value)}
-                        className={`input-field text-xs py-1.5 ${hasWarning && (turno.cedula || '').includes('???') ? 'border-red-500/50' : ''}`}
-                      />
-                    </td>
-
-                    <td className="table-cell">
-                      <input
-                        type="text"
-                        value={turno.nombre || ''}
-                        onChange={(e) => updateTurno(idx, 'nombre', e.target.value)}
-                        className={`input-field text-xs py-1.5 min-w-[180px] ${hasWarning && (turno.nombre || '').includes('???') ? 'border-red-500/50' : ''}`}
-                      />
-                    </td>
-
-                    <td className="table-cell">
-                      <input
-                        type="date"
-                        value={turno.fecha || ''}
-                        onChange={(e) => updateTurno(idx, 'fecha', e.target.value)}
-                        className="input-field text-xs py-1.5"
-                      />
-                    </td>
-
-                    <td className="table-cell text-xs text-surface-300 font-mono">
-                      {turno.diaSemana || getDayName(turno.fecha)}
-                    </td>
-
-                    <td className="table-cell">
-                      <input
-                        type="text"
-                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.horaInicio || ''}
-                        onChange={(e) => updateTurno(idx, 'horaInicio', e.target.value)}
-                        disabled={turno.esDescanso || turno.esIncapacidad}
-                        className="input-field text-xs py-1.5 text-center w-20 disabled:opacity-40"
-                        placeholder="HH:MM"
-                      />
-                    </td>
-
-                    <td className="table-cell">
-                      <input
-                        type="text"
-                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.horaFin || ''}
-                        onChange={(e) => updateTurno(idx, 'horaFin', e.target.value)}
-                        disabled={turno.esDescanso || turno.esIncapacidad}
-                        className="input-field text-xs py-1.5 text-center w-20 disabled:opacity-40"
-                        placeholder="HH:MM"
-                      />
-                    </td>
-
-                    <td className="table-cell">
-                      <input
-                        type="text"
-                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.almuerzo || ''}
-                        onChange={(e) => updateTurno(idx, 'almuerzo', e.target.value)}
-                        disabled={turno.esDescanso || turno.esIncapacidad}
-                        className="input-field text-xs py-1.5 text-center w-32 disabled:opacity-40"
-                        placeholder="HH:MM - HH:MM"
-                      />
-                    </td>
-
-                    <td className="table-cell text-center">
-                      <input
-                        type="checkbox"
-                        checked={turno.esSplit || false}
-                        onChange={(e) => updateTurno(idx, 'esSplit', e.target.checked)}
-                        disabled={turno.esDescanso || turno.esIncapacidad}
-                        className="w-4 h-4 rounded accent-brand-500"
-                      />
-                    </td>
-
-                    <td className="table-cell text-center">
-                      <input
-                        type="checkbox"
-                        checked={turno.esDescanso || false}
-                        onChange={(e) => updateTurno(idx, 'esDescanso', e.target.checked)}
-                        disabled={turno.esIncapacidad}
-                        className="w-4 h-4 rounded accent-amber-500"
-                      />
-                    </td>
-
-                    <td className="table-cell text-center">
-                      <input
-                        type="checkbox"
-                        checked={turno.esIncapacidad || false}
-                        onChange={(e) => updateTurno(idx, 'esIncapacidad', e.target.checked)}
-                        disabled={turno.esDescanso}
-                        className="w-4 h-4 rounded accent-orange-500"
-                      />
-                    </td>
-
-                    <td className="table-cell">
-                      <input
-                        type="text"
-                        value={turno.motivoAusencia || ''}
-                        onChange={(e) => updateTurno(idx, 'motivoAusencia', e.target.value)}
-                        disabled={!turno.esIncapacidad}
-                        className="input-field text-xs py-1.5 text-center w-28 disabled:opacity-40"
-                        placeholder="Motivo"
-                      />
-                    </td>
-
-                    <td className="table-cell">
-                      <input
-                        type="text"
-                        value={turno.campana || ''}
-                        onChange={(e) => updateTurno(idx, 'campana', e.target.value)}
-                        className="input-field text-xs py-1.5 text-center w-28"
-                      />
-                    </td>
-
-                    <td className="table-cell text-center">
-                      <button
-                        onClick={() => deleteTurno(idx)}
-                        className="p-1.5 rounded-lg hover:bg-red-500/20 text-surface-500 hover:text-red-400 transition-colors"
-                        title="Eliminar turno"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Split turno details (shown inline when esSplit is checked) */}
-      {turnos.some(t => t.esSplit && !t.esDescanso && !t.esIncapacidad) && (
-        <div className="glass-card p-4">
-          <h3 className="font-display font-semibold text-sm text-purple-300 mb-3 flex items-center gap-2">
-            ⏰ Detalle de Turnos Split
-          </h3>
-          <div className="space-y-2">
-            {turnos.map((turno, idx) => {
-              if (!turno.esSplit || turno.esDescanso || turno.esIncapacidad) return null
-              return (
-                <div key={idx} className="flex items-center gap-3 text-sm glass-card-light p-3">
-                  <span className="font-mono text-surface-400 w-8">#{idx + 1}</span>
-                  <span className="text-surface-300 w-40 truncate">{turno.nombre}</span>
-                  <span className="text-surface-400 text-xs">2do bloque:</span>
-                  <input
-                    type="text"
-                    value={turno.splitHoraInicio2 || ''}
-                    onChange={(e) => updateTurno(idx, 'splitHoraInicio2', e.target.value)}
-                    className="input-field text-xs py-1.5 w-20 text-center"
-                    placeholder="HH:MM"
-                  />
-                  <span className="text-surface-500">—</span>
-                  <input
-                    type="text"
-                    value={turno.splitHoraFin2 || ''}
-                    onChange={(e) => updateTurno(idx, 'splitHoraFin2', e.target.value)}
-                    className="input-field text-xs py-1.5 w-20 text-center"
-                    placeholder="HH:MM"
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="flex items-center justify-between pt-4">
-        <button onClick={onBack} className="btn-secondary flex items-center gap-2">
-          <ChevronLeft className="w-4 h-4" />
-          Volver
-        </button>
-
-        <button
-          onClick={handleGenerate}
-          disabled={isGenerating || turnos.length === 0}
-          className="btn-success flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          {isGenerating ? (
-            <>
-              <Loader2 className="w-5 h-5 spinner" />
-              Generando archivos...
-            </>
-          ) : (
-            <>
-              <Check className="w-5 h-5" />
-              Confirmar y Generar Excel ({turnos.length} turnos)
-            </>
-          )}
-        </button>
-      </div>
-    </div>
-  )
+/**
+ * Calcula las horas trabajadas entre dos strings HH:MM
+ */
+function calcularHoras(inicio, fin) {
+  if (!inicio || !fin) return 0;
+  const [h1, m1] = inicio.split(":").map(Number);
+  const [h2, m2] = fin.split(":").map(Number);
+  const totalMin = h2 * 60 + m2 - (h1 * 60 + m1);
+  return totalMin > 0 ? totalMin / 60 : 0;
 }
 
-function getDayName(dateStr) {
-  if (!dateStr) return ''
-  try {
-    const date = new Date(dateStr + 'T12:00:00')
-    const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
-    return days[date.getDay()] || ''
-  } catch {
-    return ''
+/**
+ * Calcula horas totales de un turno (incluyendo split)
+ */
+function calcularHorasTotales(turno) {
+  if (turno.esDescanso || turno.esIncapacidad) return 0;
+
+  let horas = calcularHoras(turno.horaInicio, turno.horaFin);
+
+  if (turno.esSplit && turno.splitHoraInicio2 && turno.splitHoraFin2) {
+    horas += calcularHoras(turno.splitHoraInicio2, turno.splitHoraFin2);
   }
+
+  // Restar almuerzo si tiene
+  if (turno.almuerzo && typeof turno.almuerzo === "string") {
+    const partes = turno.almuerzo.split("-").map((s) => s.trim());
+    if (partes.length === 2) {
+      const duracion = calcularHoras(partes[0], partes[1]);
+      horas -= duracion;
+    }
+  }
+
+  return Math.max(0, horas);
 }
+
+/**
+ * Formatea hora HH:MM a string legible
+ */
+function formatHora(hora) {
+  if (!hora || hora === "null") return "";
+  return hora;
+}
+
+// ============================================
+// ARCHIVO 1: FORMATO TURNOS PROGRAMADOS
+// ============================================
+
+async function generateFormatoTurnos(scheduleData, metadata) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Generador de Turnos";
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet("Turnos Programados", {
+    pageSetup: { fitToPage: true, fitToWidth: 1 },
+  });
+
+  // ---- ESTILOS ----
+  const headerFill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF1B52F5" }, // azul brand
+  };
+  const headerFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+  const headerAlignment = { horizontal: "center", vertical: "middle" };
+  const borderThin = {
+    top: { style: "thin" },
+    left: { style: "thin" },
+    bottom: { style: "thin" },
+    right: { style: "thin" },
+  };
+  const descansoFill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFFFF3CD" }, // amarillo suave
+  };
+  const incapacidadFill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFFDE8D8" }, // naranja suave
+  };
+
+  // ---- TÍTULO ----
+  sheet.mergeCells("A1:J1");
+  const titleCell = sheet.getCell("A1");
+  titleCell.value = "FORMATO TURNOS PROGRAMADOS";
+  titleCell.font = { bold: true, size: 14, color: { argb: "FF1B52F5" } };
+  titleCell.alignment = { horizontal: "center", vertical: "middle" };
+  sheet.getRow(1).height = 30;
+
+  // ---- METADATA ----
+  sheet.mergeCells("A2:E2");
+  sheet.getCell("A2").value = `Supervisor: ${metadata?.supervisor || ""}`;
+  sheet.getCell("A2").font = { bold: true };
+
+  sheet.mergeCells("F2:J2");
+  sheet.getCell("F2").value = `Campaña: ${metadata?.campana || ""}`;
+  sheet.getCell("F2").font = { bold: true };
+
+  sheet.mergeCells("A3:E3");
+  sheet.getCell("A3").value = `Semana: ${metadata?.semana || ""}`;
+
+  sheet.mergeCells("F3:J3");
+  sheet.getCell("F3").value = `Contrato: ${metadata?.contrato || ""}`;
+
+  // ---- ENCABEZADOS ----
+  const headers = [
+    { header: "Fecha", key: "fecha", width: 14 },
+    { header: "Cédula", key: "cedula", width: 16 },
+    { header: "Nombre Agente", key: "nombre", width: 30 },
+    { header: "Campaña", key: "campana", width: 20 },
+    { header: "Supervisor", key: "supervisor", width: 22 },
+    { header: "Hora Inicio", key: "horaInicio", width: 13 },
+    { header: "Hora Fin", key: "horaFin", width: 13 },
+    { header: "Almuerzo", key: "almuerzo", width: 20 },
+    { header: "Jornada", key: "jornada", width: 28 },
+    { header: "Observación", key: "obs", width: 20 },
+  ];
+
+  sheet.columns = headers.map((h) => ({ key: h.key, width: h.width }));
+
+  const headerRow = sheet.getRow(5);
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h.header;
+    cell.fill = headerFill;
+    cell.font = headerFont;
+    cell.alignment = headerAlignment;
+    cell.border = borderThin;
+  });
+  headerRow.height = 22;
+
+  // ---- DATOS ----
+  // Ordenar por fecha, luego por nombre
+  const sorted = [...scheduleData].sort((a, b) => {
+    if (a.fecha < b.fecha) return -1;
+    if (a.fecha > b.fecha) return 1;
+    return (a.nombre || "").localeCompare(b.nombre || "");
+  });
+
+  sorted.forEach((turno, idx) => {
+    const row = sheet.getRow(6 + idx);
+
+    const isDescanso = turno.esDescanso;
+    const isIncapacidad = turno.esIncapacidad;
+
+    // Valor de observación
+    let obs = "";
+    if (isDescanso) obs = "DESCANSO";
+    else if (isIncapacidad) obs = turno.motivoAusencia || "INCAPACIDAD";
+
+    // Horas mostradas
+    const horaInicio = isDescanso || isIncapacidad ? "" : formatHora(turno.horaInicio);
+    const horaFin = isDescanso || isIncapacidad ? "" : formatHora(turno.horaFin);
+    let almuerzo = isDescanso || isIncapacidad ? "" : (turno.almuerzo || "");
+    if (turno.esSplit) almuerzo = ""; // split no tiene almuerzo
+
+    row.values = [
+      turno.fecha || "",
+      turno.cedula || "",
+      turno.nombre || "",
+      turno.campana || metadata?.campana || "",
+      metadata?.supervisor || "",
+      horaInicio,
+      horaFin,
+      almuerzo,
+      turno.jornada || obs,
+      obs,
+    ];
+
+    // Estilo de fila
+    const fillColor = isIncapacidad
+      ? incapacidadFill
+      : isDescanso
+      ? descansoFill
+      : idx % 2 === 0
+      ? null
+      : { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
+
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      cell.border = borderThin;
+      cell.alignment = { vertical: "middle", horizontal: colNumber <= 3 ? "left" : "center" };
+      cell.font = { size: 10 };
+      if (fillColor) cell.fill = fillColor;
+    });
+
+    row.height = 18;
+  });
+
+  // ---- FREEZE PANES ----
+  sheet.views = [{ state: "frozen", xSplit: 0, ySplit: 5 }];
+
+  // ---- AUTO FILTER ----
+  sheet.autoFilter = {
+    from: { row: 5, column: 1 },
+    to: { row: 5, column: 10 },
+  };
+
+  // Generar buffer
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+// ============================================
+// ARCHIVO 2: PLANTILLA PROMETEO
+// ============================================
+
+async function generatePlantillaPrometeo(scheduleData, metadata) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Generador de Turnos";
+  workbook.created = new Date();
+
+  // ---- HOJA 1: PROGRAMACIÓN ----
+  const sheetProg = workbook.addWorksheet("Programación Turnos");
+
+  const headerFill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF1B52F5" },
+  };
+  const headerFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+  const borderThin = {
+    top: { style: "thin" },
+    left: { style: "thin" },
+    bottom: { style: "thin" },
+    right: { style: "thin" },
+  };
+
+  // Título
+  sheetProg.mergeCells("A1:H1");
+  const titleCell = sheetProg.getCell("A1");
+  titleCell.value = "PLANTILLA PROGRAMACIÓN TURNOS - PROMETEO";
+  titleCell.font = { bold: true, size: 14, color: { argb: "FF1B52F5" } };
+  titleCell.alignment = { horizontal: "center", vertical: "middle" };
+  sheetProg.getRow(1).height = 30;
+
+  // Metadata
+  sheetProg.mergeCells("A2:D2");
+  sheetProg.getCell("A2").value = `Líder: ${metadata?.supervisor || ""}`;
+  sheetProg.getCell("A2").font = { bold: true };
+
+  sheetProg.mergeCells("E2:H2");
+  sheetProg.getCell("E2").value = `Semana: ${metadata?.semana || ""}`;
+  sheetProg.getCell("E2").font = { bold: true };
+
+  // Encabezados
+  const headers = [
+    { header: "Cédula", key: "cedula", width: 16 },
+    { header: "Nombre Agente", key: "nombre", width: 30 },
+    { header: "Contrato", key: "contrato", width: 16 },
+    { header: "Jornada", key: "jornada", width: 30 },
+    { header: "Fecha", key: "fecha", width: 14 },
+    { header: "Día", key: "dia", width: 12 },
+    { header: "Líder", key: "lider", width: 22 },
+    { header: "Estado", key: "estado", width: 20 },
+  ];
+
+  sheetProg.columns = headers.map((h) => ({ key: h.key, width: h.width }));
+
+  const headerRow = sheetProg.getRow(4);
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h.header;
+    cell.fill = headerFill;
+    cell.font = headerFont;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = borderThin;
+  });
+  headerRow.height = 22;
+
+  // Ordenar: por nombre, luego por fecha
+  const sorted = [...scheduleData].sort((a, b) => {
+    const nameComp = (a.nombre || "").localeCompare(b.nombre || "");
+    if (nameComp !== 0) return nameComp;
+    return (a.fecha || "").localeCompare(b.fecha || "");
+  });
+
+  const descansoFill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFFFF3CD" },
+  };
+  const incapacidadFill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFFDE8D8" },
+  };
+
+  sorted.forEach((turno, idx) => {
+    const row = sheetProg.getRow(5 + idx);
+
+    const isDescanso = turno.esDescanso;
+    const isIncapacidad = turno.esIncapacidad;
+
+    let estado = "Trabajando";
+    if (isDescanso) estado = "Descanso";
+    else if (isIncapacidad) estado = turno.motivoAusencia || "Incapacidad";
+
+    row.values = [
+      turno.cedula || "",
+      turno.nombre || "",
+      turno.contrato || metadata?.contrato || "",
+      turno.jornada || estado.toUpperCase(),
+      turno.fecha || "",
+      turno.diaSemana || "",
+      metadata?.supervisor || "",
+      estado,
+    ];
+
+    const fillColor = isIncapacidad
+      ? incapacidadFill
+      : isDescanso
+      ? descansoFill
+      : idx % 2 === 0
+      ? null
+      : { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
+
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      cell.border = borderThin;
+      cell.alignment = { vertical: "middle", horizontal: colNumber <= 2 ? "left" : "center" };
+      cell.font = { size: 10 };
+      if (fillColor) cell.fill = fillColor;
+    });
+
+    row.height = 18;
+  });
+
+  sheetProg.views = [{ state: "frozen", xSplit: 0, ySplit: 4 }];
+  sheetProg.autoFilter = {
+    from: { row: 4, column: 1 },
+    to: { row: 4, column: 8 },
+  };
+
+  // ---- HOJA 2: CONTRATOS (resumen por agente) ----
+  const sheetContratos = workbook.addWorksheet("Contratos");
+
+  sheetContratos.columns = [
+    { header: "Cédula", key: "cedula", width: 16 },
+    { header: "Nombre", key: "nombre", width: 30 },
+    { header: "Campaña", key: "campana", width: 20 },
+    { header: "Contrato", key: "contrato", width: 16 },
+    { header: "Líder", key: "supervisor", width: 22 },
+  ];
+
+  const hdrRow2 = sheetContratos.getRow(1);
+  ["Cédula", "Nombre", "Campaña", "Contrato", "Líder"].forEach((h, i) => {
+    const cell = hdrRow2.getCell(i + 1);
+    cell.value = h;
+    cell.fill = headerFill;
+    cell.font = headerFont;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = borderThin;
+  });
+  hdrRow2.height = 22;
+
+  // Agentes únicos
+  const agentesMap = new Map();
+  scheduleData.forEach((t) => {
+    const key = t.cedula || t.nombre;
+    if (!agentesMap.has(key)) {
+      agentesMap.set(key, {
+        cedula: t.cedula || "",
+        nombre: t.nombre || "",
+        campana: t.campana || metadata?.campana || "",
+        contrato: t.contrato || metadata?.contrato || "",
+        supervisor: metadata?.supervisor || "",
+      });
+    }
+  });
+
+  Array.from(agentesMap.values()).forEach((agente, idx) => {
+    const row = sheetContratos.getRow(2 + idx);
+    row.values = [
+      agente.cedula,
+      agente.nombre,
+      agente.campana,
+      agente.contrato,
+      agente.supervisor,
+    ];
+    row.eachCell({ includeEmpty: true }, (cell, col) => {
+      cell.border = borderThin;
+      cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "center" };
+      cell.font = { size: 10 };
+      if (idx % 2 !== 0) {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
+      }
+    });
+    row.height = 18;
+  });
+
+  // ---- HOJA 3: JORNADAS (resumen de jornadas únicas) ----
+  const sheetJornadas = workbook.addWorksheet("Jornadas");
+
+  sheetJornadas.columns = [
+    { header: "Jornada", key: "jornada", width: 35 },
+    { header: "Tipo", key: "tipo", width: 16 },
+    { header: "Cantidad", key: "cantidad", width: 12 },
+  ];
+
+  const hdrRow3 = sheetJornadas.getRow(1);
+  ["Jornada", "Tipo", "Cantidad"].forEach((h, i) => {
+    const cell = hdrRow3.getCell(i + 1);
+    cell.value = h;
+    cell.fill = headerFill;
+    cell.font = headerFont;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = borderThin;
+  });
+  hdrRow3.height = 22;
+
+  // Contar jornadas únicas
+  const jornadasMap = new Map();
+  scheduleData.forEach((t) => {
+    if (t.esDescanso || t.esIncapacidad) return;
+    const jornada = t.jornada || "";
+    const tipo = t.esSplit ? "Split" : "Normal";
+    const key = `${jornada}__${tipo}`;
+    jornadasMap.set(key, {
+      jornada,
+      tipo,
+      cantidad: (jornadasMap.get(key)?.cantidad || 0) + 1,
+    });
+  });
+
+  Array.from(jornadasMap.values()).forEach((j, idx) => {
+    const row = sheetJornadas.getRow(2 + idx);
+    row.values = [j.jornada, j.tipo, j.cantidad];
+    row.eachCell({ includeEmpty: true }, (cell, col) => {
+      cell.border = borderThin;
+      cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "center" };
+      cell.font = { size: 10 };
+      if (idx % 2 !== 0) {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
+      }
+    });
+    row.height = 18;
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+module.exports = { generateFormatoTurnos, generatePlantillaPrometeo };
