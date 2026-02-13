@@ -4,9 +4,6 @@ const ExcelJS = require("exceljs");
 // HELPERS
 // ============================================
 
-/**
- * Calcula las horas trabajadas entre dos strings HH:MM
- */
 function calcularHoras(inicio, fin) {
   if (!inicio || !fin) return 0;
   const [h1, m1] = inicio.split(":").map(Number);
@@ -15,37 +12,24 @@ function calcularHoras(inicio, fin) {
   return totalMin > 0 ? totalMin / 60 : 0;
 }
 
-/**
- * Calcula horas totales de un turno (incluyendo split)
- */
-function calcularHorasTotales(turno) {
-  if (turno.esDescanso || turno.esIncapacidad) return 0;
-
-  let horas = calcularHoras(turno.horaInicio, turno.horaFin);
-
-  if (turno.esSplit && turno.splitHoraInicio2 && turno.splitHoraFin2) {
-    horas += calcularHoras(turno.splitHoraInicio2, turno.splitHoraFin2);
-  }
-
-  // Restar almuerzo si tiene
-  if (turno.almuerzo && typeof turno.almuerzo === "string") {
-    const partes = turno.almuerzo.split("-").map((s) => s.trim());
-    if (partes.length === 2) {
-      const duracion = calcularHoras(partes[0], partes[1]);
-      horas -= duracion;
-    }
-  }
-
-  return Math.max(0, horas);
-}
-
-/**
- * Formatea hora HH:MM a string legible
- */
 function formatHora(hora) {
   if (!hora || hora === "null") return "";
   return hora;
 }
+
+const HEADER_FILL = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FF1B52F5" },
+};
+const HEADER_FONT = { bold: true, color: { argb: "FFFFFFFF" }, size: 11, name: "Arial" };
+const BORDER = {
+  top: { style: "thin", color: { argb: "FFD0D5E2" } },
+  left: { style: "thin", color: { argb: "FFD0D5E2" } },
+  bottom: { style: "thin", color: { argb: "FFD0D5E2" } },
+  right: { style: "thin", color: { argb: "FFD0D5E2" } },
+};
+const DATA_FONT = { size: 10, name: "Arial" };
 
 // ============================================
 // ARCHIVO 1: FORMATO TURNOS PROGRAMADOS
@@ -60,83 +44,35 @@ async function generateFormatoTurnos(scheduleData, metadata) {
     pageSetup: { fitToPage: true, fitToWidth: 1 },
   });
 
-  // ---- ESTILOS ----
-  const headerFill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1B52F5" }, // azul brand
-  };
-  const headerFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-  const headerAlignment = { horizontal: "center", vertical: "middle" };
-  const borderThin = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
-  const descansoFill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FFFFF3CD" }, // amarillo suave
-  };
-  const incapacidadFill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FFFDE8D8" }, // naranja suave
-  };
-
-  // ---- TÍTULO ----
-  sheet.mergeCells("A1:J1");
-  const titleCell = sheet.getCell("A1");
-  titleCell.value = "FORMATO TURNOS PROGRAMADOS";
-  titleCell.font = { bold: true, size: 14, color: { argb: "FF1B52F5" } };
-  titleCell.alignment = { horizontal: "center", vertical: "middle" };
-  sheet.getRow(1).height = 30;
-
-  // ---- METADATA ----
-  sheet.mergeCells("A2:E2");
-  sheet.getCell("A2").value = `Supervisor: ${metadata?.supervisor || ""}`;
-  sheet.getCell("A2").font = { bold: true };
-
-  sheet.mergeCells("F2:J2");
-  sheet.getCell("F2").value = `Campaña: ${metadata?.campana || ""}`;
-  sheet.getCell("F2").font = { bold: true };
-
-  sheet.mergeCells("A3:E3");
-  sheet.getCell("A3").value = `Semana: ${metadata?.semana || ""}`;
-
-  sheet.mergeCells("F3:J3");
-  sheet.getCell("F3").value = `Contrato: ${metadata?.contrato || ""}`;
-
-  // ---- ENCABEZADOS ----
-  const headers = [
-    { header: "Fecha", key: "fecha", width: 14 },
-    { header: "Cédula", key: "cedula", width: 16 },
-    { header: "Nombre Agente", key: "nombre", width: 30 },
-    { header: "Campaña", key: "campana", width: 20 },
-    { header: "Supervisor", key: "supervisor", width: 22 },
-    { header: "Hora Inicio", key: "horaInicio", width: 13 },
-    { header: "Hora Fin", key: "horaFin", width: 13 },
-    { header: "Almuerzo", key: "almuerzo", width: 20 },
-    { header: "Jornada", key: "jornada", width: 28 },
-    { header: "Observación", key: "obs", width: 20 },
+  // ---- COLUMNAS ----
+  const columns = [
+    { header: "Fecha",        key: "fecha",      width: 14 },
+    { header: "Cedula",       key: "cedula",     width: 16 },
+    { header: "Nombre Agente",key: "nombre",     width: 30 },
+    { header: "Campana",      key: "campana",    width: 20 },
+    { header: "Supervisor",   key: "supervisor", width: 22 },
+    { header: "Hora Inicio",  key: "horaInicio", width: 13 },
+    { header: "Hora Fin",     key: "horaFin",    width: 13 },
+    { header: "Almuerzo",     key: "almuerzo",   width: 20 },
+    { header: "Jornada",      key: "jornada",    width: 28 },
+    { header: "Observacion",  key: "obs",        width: 20 },
   ];
 
-  sheet.columns = headers.map((h) => ({ key: h.key, width: h.width }));
+  sheet.columns = columns.map((c) => ({ key: c.key, width: c.width }));
 
-  const headerRow = sheet.getRow(5);
-  headers.forEach((h, i) => {
+  // ---- ENCABEZADO (fila 1) ----
+  const headerRow = sheet.getRow(1);
+  columns.forEach((col, i) => {
     const cell = headerRow.getCell(i + 1);
-    cell.value = h.header;
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.alignment = headerAlignment;
-    cell.border = borderThin;
+    cell.value = col.header;
+    cell.fill = HEADER_FILL;
+    cell.font = HEADER_FONT;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = BORDER;
   });
   headerRow.height = 22;
 
-  // ---- DATOS ----
-  // Ordenar por fecha, luego por nombre
+  // ---- DATOS (desde fila 2) ----
   const sorted = [...scheduleData].sort((a, b) => {
     if (a.fecha < b.fecha) return -1;
     if (a.fecha > b.fecha) return 1;
@@ -144,21 +80,18 @@ async function generateFormatoTurnos(scheduleData, metadata) {
   });
 
   sorted.forEach((turno, idx) => {
-    const row = sheet.getRow(6 + idx);
-
+    const row = sheet.getRow(2 + idx);
     const isDescanso = turno.esDescanso;
     const isIncapacidad = turno.esIncapacidad;
 
-    // Valor de observación
     let obs = "";
     if (isDescanso) obs = "DESCANSO";
     else if (isIncapacidad) obs = turno.motivoAusencia || "INCAPACIDAD";
 
-    // Horas mostradas
     const horaInicio = isDescanso || isIncapacidad ? "" : formatHora(turno.horaInicio);
-    const horaFin = isDescanso || isIncapacidad ? "" : formatHora(turno.horaFin);
-    let almuerzo = isDescanso || isIncapacidad ? "" : (turno.almuerzo || "");
-    if (turno.esSplit) almuerzo = ""; // split no tiene almuerzo
+    const horaFin    = isDescanso || isIncapacidad ? "" : formatHora(turno.horaFin);
+    let almuerzo     = isDescanso || isIncapacidad ? "" : (turno.almuerzo || "");
+    if (turno.esSplit) almuerzo = "";
 
     row.values = [
       turno.fecha || "",
@@ -173,35 +106,19 @@ async function generateFormatoTurnos(scheduleData, metadata) {
       obs,
     ];
 
-    // Estilo de fila
-    const fillColor = isIncapacidad
-      ? incapacidadFill
-      : isDescanso
-      ? descansoFill
-      : idx % 2 === 0
-      ? null
-      : { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
-
     row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      cell.border = borderThin;
+      cell.border = BORDER;
       cell.alignment = { vertical: "middle", horizontal: colNumber <= 3 ? "left" : "center" };
-      cell.font = { size: 10 };
-      if (fillColor) cell.fill = fillColor;
+      cell.font = DATA_FONT;
     });
 
     row.height = 18;
   });
 
-  // ---- FREEZE PANES ----
-  sheet.views = [{ state: "frozen", xSplit: 0, ySplit: 5 }];
+  // ---- FREEZE + AUTOFILTER ----
+  sheet.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
 
-  // ---- AUTO FILTER ----
-  sheet.autoFilter = {
-    from: { row: 5, column: 1 },
-    to: { row: 5, column: 10 },
-  };
-
-  // Generar buffer
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }
@@ -215,91 +132,45 @@ async function generatePlantillaPrometeo(scheduleData, metadata) {
   workbook.creator = "Generador de Turnos";
   workbook.created = new Date();
 
-  // ---- HOJA 1: PROGRAMACIÓN ----
-  const sheetProg = workbook.addWorksheet("Programación Turnos");
+  // ---- HOJA 1: PROGRAMACION ----
+  const sheetProg = workbook.addWorksheet("Programacion Turnos");
 
-  const headerFill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1B52F5" },
-  };
-  const headerFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-  const borderThin = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
-
-  // Título
-  sheetProg.mergeCells("A1:H1");
-  const titleCell = sheetProg.getCell("A1");
-  titleCell.value = "PLANTILLA PROGRAMACIÓN TURNOS - PROMETEO";
-  titleCell.font = { bold: true, size: 14, color: { argb: "FF1B52F5" } };
-  titleCell.alignment = { horizontal: "center", vertical: "middle" };
-  sheetProg.getRow(1).height = 30;
-
-  // Metadata
-  sheetProg.mergeCells("A2:D2");
-  sheetProg.getCell("A2").value = `Líder: ${metadata?.supervisor || ""}`;
-  sheetProg.getCell("A2").font = { bold: true };
-
-  sheetProg.mergeCells("E2:H2");
-  sheetProg.getCell("E2").value = `Semana: ${metadata?.semana || ""}`;
-  sheetProg.getCell("E2").font = { bold: true };
-
-  // Encabezados
-  const headers = [
-    { header: "Cédula", key: "cedula", width: 16 },
-    { header: "Nombre Agente", key: "nombre", width: 30 },
-    { header: "Contrato", key: "contrato", width: 16 },
-    { header: "Jornada", key: "jornada", width: 30 },
-    { header: "Fecha", key: "fecha", width: 14 },
-    { header: "Día", key: "dia", width: 12 },
-    { header: "Líder", key: "lider", width: 22 },
-    { header: "Estado", key: "estado", width: 20 },
+  const colsProg = [
+    { header: "Cedula",        key: "cedula",   width: 16 },
+    { header: "Nombre Agente", key: "nombre",   width: 30 },
+    { header: "Contrato",      key: "contrato", width: 30 },
+    { header: "Jornada",       key: "jornada",  width: 30 },
+    { header: "Fecha",         key: "fecha",    width: 14 },
+    { header: "Dia",           key: "dia",      width: 12 },
+    { header: "Lider",         key: "lider",    width: 22 },
+    { header: "Estado",        key: "estado",   width: 18 },
   ];
 
-  sheetProg.columns = headers.map((h) => ({ key: h.key, width: h.width }));
+  sheetProg.columns = colsProg.map((c) => ({ key: c.key, width: c.width }));
 
-  const headerRow = sheetProg.getRow(4);
-  headers.forEach((h, i) => {
-    const cell = headerRow.getCell(i + 1);
-    cell.value = h.header;
-    cell.fill = headerFill;
-    cell.font = headerFont;
+  const hdr1 = sheetProg.getRow(1);
+  colsProg.forEach((col, i) => {
+    const cell = hdr1.getCell(i + 1);
+    cell.value = col.header;
+    cell.fill = HEADER_FILL;
+    cell.font = HEADER_FONT;
     cell.alignment = { horizontal: "center", vertical: "middle" };
-    cell.border = borderThin;
+    cell.border = BORDER;
   });
-  headerRow.height = 22;
+  hdr1.height = 22;
 
-  // Ordenar: por nombre, luego por fecha
   const sorted = [...scheduleData].sort((a, b) => {
-    const nameComp = (a.nombre || "").localeCompare(b.nombre || "");
-    if (nameComp !== 0) return nameComp;
+    const n = (a.nombre || "").localeCompare(b.nombre || "");
+    if (n !== 0) return n;
     return (a.fecha || "").localeCompare(b.fecha || "");
   });
 
-  const descansoFill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FFFFF3CD" },
-  };
-  const incapacidadFill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FFFDE8D8" },
-  };
-
   sorted.forEach((turno, idx) => {
-    const row = sheetProg.getRow(5 + idx);
-
-    const isDescanso = turno.esDescanso;
-    const isIncapacidad = turno.esIncapacidad;
+    const row = sheetProg.getRow(2 + idx);
 
     let estado = "Trabajando";
-    if (isDescanso) estado = "Descanso";
-    else if (isIncapacidad) estado = turno.motivoAusencia || "Incapacidad";
+    if (turno.esDescanso) estado = "Descanso";
+    else if (turno.esIncapacidad) estado = turno.motivoAusencia || "Incapacidad";
 
     row.values = [
       turno.cedula || "",
@@ -312,53 +183,41 @@ async function generatePlantillaPrometeo(scheduleData, metadata) {
       estado,
     ];
 
-    const fillColor = isIncapacidad
-      ? incapacidadFill
-      : isDescanso
-      ? descansoFill
-      : idx % 2 === 0
-      ? null
-      : { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
-
-    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      cell.border = borderThin;
-      cell.alignment = { vertical: "middle", horizontal: colNumber <= 2 ? "left" : "center" };
-      cell.font = { size: 10 };
-      if (fillColor) cell.fill = fillColor;
+    row.eachCell({ includeEmpty: true }, (cell, col) => {
+      cell.border = BORDER;
+      cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "center" };
+      cell.font = DATA_FONT;
     });
-
     row.height = 18;
   });
 
-  sheetProg.views = [{ state: "frozen", xSplit: 0, ySplit: 4 }];
-  sheetProg.autoFilter = {
-    from: { row: 4, column: 1 },
-    to: { row: 4, column: 8 },
-  };
+  sheetProg.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
+  sheetProg.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colsProg.length } };
 
-  // ---- HOJA 2: CONTRATOS (resumen por agente) ----
+  // ---- HOJA 2: CONTRATOS ----
   const sheetContratos = workbook.addWorksheet("Contratos");
 
-  sheetContratos.columns = [
-    { header: "Cédula", key: "cedula", width: 16 },
-    { header: "Nombre", key: "nombre", width: 30 },
-    { header: "Campaña", key: "campana", width: 20 },
-    { header: "Contrato", key: "contrato", width: 16 },
-    { header: "Líder", key: "supervisor", width: 22 },
+  const colsCon = [
+    { header: "Cedula",    key: "cedula",     width: 16 },
+    { header: "Nombre",    key: "nombre",     width: 30 },
+    { header: "Campana",   key: "campana",    width: 20 },
+    { header: "Contrato",  key: "contrato",   width: 30 },
+    { header: "Lider",     key: "supervisor", width: 22 },
   ];
 
-  const hdrRow2 = sheetContratos.getRow(1);
-  ["Cédula", "Nombre", "Campaña", "Contrato", "Líder"].forEach((h, i) => {
-    const cell = hdrRow2.getCell(i + 1);
-    cell.value = h;
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.alignment = { horizontal: "center", vertical: "middle" };
-    cell.border = borderThin;
-  });
-  hdrRow2.height = 22;
+  sheetContratos.columns = colsCon.map((c) => ({ key: c.key, width: c.width }));
 
-  // Agentes únicos
+  const hdr2 = sheetContratos.getRow(1);
+  colsCon.forEach((col, i) => {
+    const cell = hdr2.getCell(i + 1);
+    cell.value = col.header;
+    cell.fill = HEADER_FILL;
+    cell.font = HEADER_FONT;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = BORDER;
+  });
+  hdr2.height = 22;
+
   const agentesMap = new Map();
   scheduleData.forEach((t) => {
     const key = t.cedula || t.nombre;
@@ -375,45 +234,40 @@ async function generatePlantillaPrometeo(scheduleData, metadata) {
 
   Array.from(agentesMap.values()).forEach((agente, idx) => {
     const row = sheetContratos.getRow(2 + idx);
-    row.values = [
-      agente.cedula,
-      agente.nombre,
-      agente.campana,
-      agente.contrato,
-      agente.supervisor,
-    ];
+    row.values = [agente.cedula, agente.nombre, agente.campana, agente.contrato, agente.supervisor];
     row.eachCell({ includeEmpty: true }, (cell, col) => {
-      cell.border = borderThin;
+      cell.border = BORDER;
       cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "center" };
-      cell.font = { size: 10 };
-      if (idx % 2 !== 0) {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
-      }
+      cell.font = DATA_FONT;
     });
     row.height = 18;
   });
 
-  // ---- HOJA 3: JORNADAS (resumen de jornadas únicas) ----
+  sheetContratos.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
+  sheetContratos.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colsCon.length } };
+
+  // ---- HOJA 3: JORNADAS ----
   const sheetJornadas = workbook.addWorksheet("Jornadas");
 
-  sheetJornadas.columns = [
-    { header: "Jornada", key: "jornada", width: 35 },
-    { header: "Tipo", key: "tipo", width: 16 },
+  const colsJor = [
+    { header: "Jornada",  key: "jornada",  width: 35 },
+    { header: "Tipo",     key: "tipo",     width: 16 },
     { header: "Cantidad", key: "cantidad", width: 12 },
   ];
 
-  const hdrRow3 = sheetJornadas.getRow(1);
-  ["Jornada", "Tipo", "Cantidad"].forEach((h, i) => {
-    const cell = hdrRow3.getCell(i + 1);
-    cell.value = h;
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.alignment = { horizontal: "center", vertical: "middle" };
-    cell.border = borderThin;
-  });
-  hdrRow3.height = 22;
+  sheetJornadas.columns = colsJor.map((c) => ({ key: c.key, width: c.width }));
 
-  // Contar jornadas únicas
+  const hdr3 = sheetJornadas.getRow(1);
+  colsJor.forEach((col, i) => {
+    const cell = hdr3.getCell(i + 1);
+    cell.value = col.header;
+    cell.fill = HEADER_FILL;
+    cell.font = HEADER_FONT;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = BORDER;
+  });
+  hdr3.height = 22;
+
   const jornadasMap = new Map();
   scheduleData.forEach((t) => {
     if (t.esDescanso || t.esIncapacidad) return;
@@ -431,15 +285,14 @@ async function generatePlantillaPrometeo(scheduleData, metadata) {
     const row = sheetJornadas.getRow(2 + idx);
     row.values = [j.jornada, j.tipo, j.cantidad];
     row.eachCell({ includeEmpty: true }, (cell, col) => {
-      cell.border = borderThin;
+      cell.border = BORDER;
       cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "center" };
-      cell.font = { size: 10 };
-      if (idx % 2 !== 0) {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FC" } };
-      }
+      cell.font = DATA_FONT;
     });
     row.height = 18;
   });
+
+  sheetJornadas.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
