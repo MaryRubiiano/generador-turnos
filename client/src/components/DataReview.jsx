@@ -16,12 +16,13 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
     const dias = new Set(turnos.map(t => t.fecha)).size
     const descansos = turnos.filter(t => t.esDescanso).length
     const splits = turnos.filter(t => t.esSplit).length
+    const incapacidades = turnos.filter(t => t.esIncapacidad).length
     const warnings = turnos.filter(t =>
       (t.nombre || '').includes('???') ||
       (t.cedula || '').includes('???') ||
       (t.horaInicio || '').includes('???')
     ).length
-    return { agentes, dias, descansos, splits, warnings, total: turnos.length }
+    return { agentes, dias, descansos, splits, incapacidades, warnings, total: turnos.length }
   }, [turnos])
 
   // Agrupar turnos por agente
@@ -39,6 +40,32 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
     setTurnos(prev => {
       const updated = [...prev]
       updated[index] = { ...updated[index], [field]: value }
+
+      // Si se marca como incapacidad, limpiar horas y desmarcar descanso
+      if (field === 'esIncapacidad' && value === true) {
+        updated[index].esDescanso = false
+        updated[index].esSplit = false
+        updated[index].horaInicio = null
+        updated[index].horaFin = null
+        updated[index].almuerzo = null
+        updated[index].splitHoraInicio2 = null
+        updated[index].splitHoraFin2 = null
+        if (!updated[index].motivoAusencia) {
+          updated[index].motivoAusencia = 'Incapacidad'
+        }
+      }
+
+      // Si se desmarca incapacidad, limpiar motivo
+      if (field === 'esIncapacidad' && value === false) {
+        updated[index].motivoAusencia = null
+      }
+
+      // Si se marca como descanso, desmarcar incapacidad
+      if (field === 'esDescanso' && value === true) {
+        updated[index].esIncapacidad = false
+        updated[index].motivoAusencia = null
+      }
+
       return updated
     })
   }
@@ -56,6 +83,8 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
       horaInicio: '07:00',
       horaFin: '17:00',
       esDescanso: false,
+      esIncapacidad: false,
+      motivoAusencia: null,
       esSplit: false,
       splitHoraInicio2: null,
       splitHoraFin2: null,
@@ -75,7 +104,7 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
       const response = await axios.post(`${API_URL}/api/generate`, {
         scheduleData: turnos,
         metadata,
-        imagenesPaths: data.imagenesPaths || [], // ⬅️ AGREGAR ESTA LÍNEA
+        imagenesPaths: data.imagenesPaths || [],
       })
 
       if (response.data.success) {
@@ -145,13 +174,14 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
         {[
           { label: 'Agentes', value: stats.agentes, icon: <Users className="w-4 h-4" />, color: 'text-brand-400' },
           { label: 'Días', value: stats.dias, icon: <CalendarDays className="w-4 h-4" />, color: 'text-blue-400' },
           { label: 'Turnos', value: stats.total, icon: '📋', color: 'text-surface-200' },
           { label: 'Descansos', value: stats.descansos, icon: '😴', color: 'text-amber-400' },
           { label: 'Split', value: stats.splits, icon: '⏰', color: 'text-purple-400' },
+          { label: 'Incapacidad', value: stats.incapacidades, icon: '🏥', color: 'text-orange-400' },
           { label: 'Advertencias', value: stats.warnings, icon: <AlertTriangle className="w-4 h-4" />, color: stats.warnings > 0 ? 'text-red-400' : 'text-emerald-400' },
         ].map((s) => (
           <div key={s.label} className="glass-card-light p-3 text-center">
@@ -178,6 +208,20 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
         </div>
       )}
 
+      {stats.incapacidades > 0 && (
+        <div className="glass-card border-orange-500/30 bg-orange-500/5 p-4 flex items-start gap-3">
+          <span className="text-lg shrink-0">🏥</span>
+          <div>
+            <p className="text-sm text-orange-300 font-medium">
+              Se detectaron {stats.incapacidades} día(s) de incapacidad/ausencia
+            </p>
+            <p className="text-xs text-surface-400 mt-1">
+              Estos días se marcarán como no laborados en los archivos Excel con el motivo correspondiente.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Data Table */}
       <div className="glass-card overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b border-surface-800/50">
@@ -191,7 +235,7 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
         </div>
 
         <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
-          <table className="w-full min-w-[1100px]">
+          <table className="w-full min-w-[1300px]">
             <thead className="sticky top-0 z-10 bg-surface-900/95 backdrop-blur">
               <tr className="text-xs font-mono text-surface-400 uppercase tracking-wider">
                 <th className="table-cell text-left w-10">#</th>
@@ -204,6 +248,8 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                 <th className="table-cell text-center">Almuerzo</th>
                 <th className="table-cell text-center">Split</th>
                 <th className="table-cell text-center">Descanso</th>
+                <th className="table-cell text-center">Incap.</th>
+                <th className="table-cell text-center">Motivo</th>
                 <th className="table-cell text-center">Campaña</th>
                 <th className="table-cell text-center w-20">Acc.</th>
               </tr>
@@ -214,12 +260,16 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                 const hasWarning = (turno.nombre || '').includes('???') ||
                   (turno.cedula || '').includes('???') ||
                   (turno.horaInicio || '').includes('???')
+                const isIncapacidad = turno.esIncapacidad
 
                 return (
                   <tr
                     key={idx}
                     className={`transition-colors ${
-                      hasWarning ? 'bg-red-500/5' : idx % 2 === 0 ? 'bg-transparent' : 'bg-surface-900/20'
+                      isIncapacidad ? 'bg-orange-500/5' :
+                      hasWarning ? 'bg-red-500/5' :
+                      turno.esDescanso ? 'bg-amber-500/5' :
+                      idx % 2 === 0 ? 'bg-transparent' : 'bg-surface-900/20'
                     } hover:bg-surface-800/30`}
                   >
                     <td className="table-cell text-surface-500 font-mono text-xs">{idx + 1}</td>
@@ -258,9 +308,9 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                     <td className="table-cell">
                       <input
                         type="text"
-                        value={turno.esDescanso ? '-' : turno.horaInicio || ''}
+                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.horaInicio || ''}
                         onChange={(e) => updateTurno(idx, 'horaInicio', e.target.value)}
-                        disabled={turno.esDescanso}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
                         className="input-field text-xs py-1.5 text-center w-20 disabled:opacity-40"
                         placeholder="HH:MM"
                       />
@@ -269,9 +319,9 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                     <td className="table-cell">
                       <input
                         type="text"
-                        value={turno.esDescanso ? '-' : turno.horaFin || ''}
+                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.horaFin || ''}
                         onChange={(e) => updateTurno(idx, 'horaFin', e.target.value)}
-                        disabled={turno.esDescanso}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
                         className="input-field text-xs py-1.5 text-center w-20 disabled:opacity-40"
                         placeholder="HH:MM"
                       />
@@ -280,9 +330,9 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                     <td className="table-cell">
                       <input
                         type="text"
-                        value={turno.esDescanso ? '-' : turno.almuerzo || ''}
+                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.almuerzo || ''}
                         onChange={(e) => updateTurno(idx, 'almuerzo', e.target.value)}
-                        disabled={turno.esDescanso}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
                         className="input-field text-xs py-1.5 text-center w-32 disabled:opacity-40"
                         placeholder="HH:MM - HH:MM"
                       />
@@ -293,7 +343,7 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                         type="checkbox"
                         checked={turno.esSplit || false}
                         onChange={(e) => updateTurno(idx, 'esSplit', e.target.checked)}
-                        disabled={turno.esDescanso}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
                         className="w-4 h-4 rounded accent-brand-500"
                       />
                     </td>
@@ -303,7 +353,29 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                         type="checkbox"
                         checked={turno.esDescanso || false}
                         onChange={(e) => updateTurno(idx, 'esDescanso', e.target.checked)}
+                        disabled={turno.esIncapacidad}
                         className="w-4 h-4 rounded accent-amber-500"
+                      />
+                    </td>
+
+                    <td className="table-cell text-center">
+                      <input
+                        type="checkbox"
+                        checked={turno.esIncapacidad || false}
+                        onChange={(e) => updateTurno(idx, 'esIncapacidad', e.target.checked)}
+                        disabled={turno.esDescanso}
+                        className="w-4 h-4 rounded accent-orange-500"
+                      />
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={turno.motivoAusencia || ''}
+                        onChange={(e) => updateTurno(idx, 'motivoAusencia', e.target.value)}
+                        disabled={!turno.esIncapacidad}
+                        className="input-field text-xs py-1.5 text-center w-28 disabled:opacity-40"
+                        placeholder="Motivo"
                       />
                     </td>
 
@@ -334,14 +406,14 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
       </div>
 
       {/* Split turno details (shown inline when esSplit is checked) */}
-      {turnos.some(t => t.esSplit && !t.esDescanso) && (
+      {turnos.some(t => t.esSplit && !t.esDescanso && !t.esIncapacidad) && (
         <div className="glass-card p-4">
           <h3 className="font-display font-semibold text-sm text-purple-300 mb-3 flex items-center gap-2">
             ⏰ Detalle de Turnos Split
           </h3>
           <div className="space-y-2">
             {turnos.map((turno, idx) => {
-              if (!turno.esSplit || turno.esDescanso) return null
+              if (!turno.esSplit || turno.esDescanso || turno.esIncapacidad) return null
               return (
                 <div key={idx} className="flex items-center gap-3 text-sm glass-card-light p-3">
                   <span className="font-mono text-surface-400 w-8">#{idx + 1}</span>

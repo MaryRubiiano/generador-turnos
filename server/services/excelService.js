@@ -1,504 +1,482 @@
-const ExcelJS = require("exceljs");
+import { useState, useMemo } from 'react'
+import { Check, ChevronLeft, Loader2, Plus, Trash2, Edit3, Save, AlertTriangle, Users, CalendarDays } from 'lucide-react'
+import axios from 'axios'
 
-// Non-breaking space character used in the template format
-const NBSP = "\u00a0";
+const API_URL = import.meta.env.VITE_API_URL || '';
 
-/**
- * Genera el archivo "Formato_Turnos_Programados.xlsx" y retorna el Buffer
- * Estructura: Fecha | Cedula | Nombre Agente | Campaña | Supervisor | Hora Inicio Turno | Hora Fin Turno | Almuerzo
- *
- * Para turnos SPLIT:
- *   Hora Inicio Turno = "6:00:00 a. m. -  10:00: 00 a.m" (primera franja completa)
- *   Hora Fin Turno    = "5:00:00 p. m. -  10:00: 00 p.m" (segunda franja completa)
- *   Almuerzo = vacío
- *
- * Para turnos NORMALES:
- *   Hora Inicio Turno = time object (ej: 07:42)
- *   Hora Fin Turno    = time object (ej: 18:00)
- *   Almuerzo = "1:00 pm - 2:00 pm"
- *
- * Para DESCANSO:
- *   Hora Inicio Turno = "Descanso"
- *   Hora Fin Turno    = "Descanso"
- *   Almuerzo = vacío
- *
- * @returns {Promise<Buffer>} - Buffer del archivo Excel
- */
-async function generateFormatoTurnos(turnos, metadata) {
-  const workbook = new ExcelJS.Workbook();
-  const ws = workbook.addWorksheet("Hoja1");
+export default function DataReview({ data, onConfirm, onBack, onError }) {
+  const [metadata, setMetadata] = useState(data.metadata || {})
+  const [turnos, setTurnos] = useState(data.turnos || [])
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [editingRow, setEditingRow] = useState(null)
 
-  // Definir columnas
-  ws.columns = [
-    { header: "Fecha", key: "fecha", width: 15 },
-    { header: "Cédula", key: "cedula", width: 15 },
-    { header: "Nombre Agente", key: "nombre", width: 35 },
-    { header: "Campaña", key: "campana", width: 25 },
-    { header: "Supervisor", key: "supervisor", width: 30 },
-    { header: "Hora Inicio Turno", key: "horaInicio", width: 35 },
-    { header: "Hora Fin Turno", key: "horaFin", width: 35 },
-    { header: "Almuerzo", key: "almuerzo", width: 22 },
-  ];
+  // Stats
+  const stats = useMemo(() => {
+    const agentes = new Set(turnos.map(t => t.cedula)).size
+    const dias = new Set(turnos.map(t => t.fecha)).size
+    const descansos = turnos.filter(t => t.esDescanso).length
+    const splits = turnos.filter(t => t.esSplit).length
+    const incapacidades = turnos.filter(t => t.esIncapacidad).length
+    const warnings = turnos.filter(t =>
+      (t.nombre || '').includes('???') ||
+      (t.cedula || '').includes('???') ||
+      (t.horaInicio || '').includes('???')
+    ).length
+    return { agentes, dias, descansos, splits, incapacidades, warnings, total: turnos.length }
+  }, [turnos])
 
-  // Estilo del encabezado
-  const headerRow = ws.getRow(1);
-  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-  headerRow.fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF4472C4" },
-  };
-  headerRow.alignment = { horizontal: "center", vertical: "middle" };
-
-  // Ordenar turnos por fecha, luego campaña (CORFICOLOMBIANA primero), luego nombre
-  const campanaPriority = (campana) => {
-    const c = (campana || "").toUpperCase();
-    if (c.includes("CORFICOLOMBIANA")) return 0;
-    if (c.includes("AVC")) return 1;
-    return 2;
-  };
-
-  const sortedTurnos = [...turnos].sort((a, b) => {
-    const dateCompare = (a.fecha || "").localeCompare(b.fecha || "");
-    if (dateCompare !== 0) return dateCompare;
-    const campCompare = campanaPriority(a.campana) - campanaPriority(b.campana);
-    if (campCompare !== 0) return campCompare;
-    return (a.nombre || "").localeCompare(b.nombre || "");
-  });
-
-  // Agregar filas de datos
-  for (const turno of sortedTurnos) {
-    let horaInicioVal, horaFinVal, almuerzoVal;
-
-    if (turno.esDescanso) {
-      horaInicioVal = "Descanso";
-      horaFinVal = "Descanso";
-      almuerzoVal = "";
-    } else if (turno.esSplit) {
-      // Para turnos split: cada columna muestra una franja como rango en formato 12h
-      // "6:00:00 a. m. -  10:00: 00 a.m"
-      horaInicioVal = formatRangoFormatoTurnos(turno.horaInicio, turno.horaFin);
-      horaFinVal = formatRangoFormatoTurnos(turno.splitHoraInicio2, turno.splitHoraFin2);
-      almuerzoVal = "";
-    } else {
-      // Turno normal: hora como time object via ExcelJS
-      horaInicioVal = formatTimeAsExcelTime(turno.horaInicio);
-      horaFinVal = formatTimeAsExcelTime(turno.horaFin);
-      almuerzoVal = turno.almuerzo ? formatAlmuerzo12h(turno.almuerzo) : "";
+  // Agrupar turnos por agente
+  const turnosByAgent = useMemo(() => {
+    const grouped = {}
+    for (const turno of turnos) {
+      const key = turno.cedula || turno.nombre
+      if (!grouped[key]) grouped[key] = []
+      grouped[key].push(turno)
     }
+    return grouped
+  }, [turnos])
 
-    const row = ws.addRow({
-      fecha: turno.fecha ? new Date(turno.fecha + "T00:00:00") : "",
-      cedula: turno.cedula ? Number(turno.cedula) || turno.cedula : "",
-      nombre: formatNombreAgente(turno.nombre || ""),
-      campana: turno.campana || metadata?.campana || "",
-      supervisor: formatNombreSupervisor(metadata?.supervisor || ""),
-      horaInicio: horaInicioVal,
-      horaFin: horaFinVal,
-      almuerzo: almuerzoVal,
-    });
+  const updateTurno = (index, field, value) => {
+    setTurnos(prev => {
+      const updated = [...prev]
+      updated[index] = { ...updated[index], [field]: value }
 
-    // Formato de fecha
-    if (turno.fecha) {
-      row.getCell("fecha").numFmt = "yyyy-mm-dd";
-    }
-
-    // Si hora es un time object (no string), aplicar formato de hora AM/PM
-    if (!turno.esDescanso && !turno.esSplit) {
-      if (typeof horaInicioVal === "number") {
-        row.getCell("horaInicio").numFmt = "h:mm AM/PM";
+      // Si se marca como incapacidad, limpiar horas y desmarcar descanso
+      if (field === 'esIncapacidad' && value === true) {
+        updated[index].esDescanso = false
+        updated[index].esSplit = false
+        updated[index].horaInicio = null
+        updated[index].horaFin = null
+        updated[index].almuerzo = null
+        updated[index].splitHoraInicio2 = null
+        updated[index].splitHoraFin2 = null
+        if (!updated[index].motivoAusencia) {
+          updated[index].motivoAusencia = 'Incapacidad'
+        }
       }
-      if (typeof horaFinVal === "number") {
-        row.getCell("horaFin").numFmt = "h:mm AM/PM";
+
+      // Si se desmarca incapacidad, limpiar motivo
+      if (field === 'esIncapacidad' && value === false) {
+        updated[index].motivoAusencia = null
       }
-    }
 
-    // Centrar todas las celdas de la fila
-    row.alignment = { horizontal: "center", vertical: "middle" };
-  }
-
-  // Bordes para todas las celdas con datos
-  const totalRows = ws.rowCount;
-  for (let row = 1; row <= totalRows; row++) {
-    for (let col = 1; col <= 8; col++) {
-      const cell = ws.getCell(row, col);
-      cell.border = {
-        top: { style: "thin" },
-        left: { style: "thin" },
-        bottom: { style: "thin" },
-        right: { style: "thin" },
-      };
-      // Asegurar centrado en todas las celdas
-      if (!cell.alignment) {
-        cell.alignment = { horizontal: "center", vertical: "middle" };
+      // Si se marca como descanso, desmarcar incapacidad
+      if (field === 'esDescanso' && value === true) {
+        updated[index].esIncapacidad = false
+        updated[index].motivoAusencia = null
       }
-    }
-  }
 
-  // Retornar como Buffer en lugar de escribir a archivo
-  const buffer = await workbook.xlsx.writeBuffer();
-  console.log(`  📄 Formato Turnos generado (${buffer.length} bytes)`);
-  return buffer;
-}
-
-/**
- * Genera el archivo "PLANTILLA_DE_PROGRAMACION_TURNOS_PROMETEO.xlsx" y retorna el Buffer
- *
- * Columnas: Cédula | Nombre | Contrato | Jornada | Fecha | Líder
- *
- * Jornada para SPLIT: "6:00:00 a.\u00a0m. -  10:00: 00 a.m // 5:00:00 p.\u00a0m. -  10:00: 00 p.m"
- * Jornada para NORMAL: "7:42:00 a.\u00a0m. -  06:00: 00 p.m"
- * Jornada para DESCANSO: "Descanso"
- *
- * @returns {Promise<Buffer>} - Buffer del archivo Excel
- */
-async function generatePlantillaPrometeo(turnos, metadata) {
-  const workbook = new ExcelJS.Workbook();
-
-  const sheetName = metadata?.semana || generarNombreHoja(turnos);
-
-  const ws = workbook.addWorksheet(sheetName);
-
-  ws.columns = [
-    { header: "Cédula", key: "cedula", width: 15 },
-    { header: "Nombre ", key: "nombre", width: 40 },
-    { header: "Contrato", key: "contrato", width: 45 },
-    { header: "Jornada", key: "jornada", width: 55 },
-    { header: "Fecha", key: "fecha", width: 15 },
-    { header: "Líder ", key: "lider", width: 35 },
-  ];
-
-  const headerRow = ws.getRow(1);
-  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-  headerRow.fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF2F5496" },
-  };
-  headerRow.alignment = { horizontal: "center", vertical: "middle" };
-
-  const campanaPriority = (campana) => {
-    const c = (campana || "").toUpperCase();
-    if (c.includes("CORFICOLOMBIANA")) return 0;
-    if (c.includes("AVC")) return 1;
-    return 2;
-  };
-
-  const sortedTurnos = [...turnos].sort((a, b) => {
-    const campCompare = campanaPriority(a.campana) - campanaPriority(b.campana);
-    if (campCompare !== 0) return campCompare;
-    const cedulaCompare = (a.cedula || "").localeCompare(b.cedula || "");
-    if (cedulaCompare !== 0) return cedulaCompare;
-    return (a.fecha || "").localeCompare(b.fecha || "");
-  });
-
-  for (const turno of sortedTurnos) {
-    let jornada;
-
-    if (turno.esDescanso) {
-      jornada = "Descanso";
-    } else if (turno.esSplit) {
-      // Split: "6:00:00 a.\u00a0m. -  10:00: 00 a.m // 5:00:00 p.\u00a0m. -  10:00: 00 p.m"
-      const franja1 = formatRangoPlantilla(turno.horaInicio, turno.horaFin);
-      const franja2 = formatRangoPlantilla(turno.splitHoraInicio2, turno.splitHoraFin2);
-      jornada = `${franja1} // ${franja2}`;
-    } else {
-      // Normal: "7:42:00 a.\u00a0m. -  06:00: 00 p.m"
-      jornada = formatRangoPlantilla(turno.horaInicio, turno.horaFin);
-    }
-
-    const row = ws.addRow({
-      cedula: turno.cedula ? Number(turno.cedula) || turno.cedula : "",
-      nombre: (turno.nombre || "").toUpperCase(),
-      contrato: turno.contrato || metadata?.contrato || "",
-      jornada: jornada,
-      fecha: turno.fecha ? new Date(turno.fecha + "T00:00:00") : "",
-      lider: (metadata?.supervisor || "").toUpperCase(),
-    });
-
-    if (turno.fecha) {
-      row.getCell("fecha").numFmt = "yyyy-mm-dd";
-    }
-
-    // Centrar todas las celdas de la fila
-    row.alignment = { horizontal: "center", vertical: "middle" };
-  }
-
-  const totalRows = ws.rowCount;
-  for (let row = 1; row <= totalRows; row++) {
-    for (let col = 1; col <= 6; col++) {
-      const cell = ws.getCell(row, col);
-      cell.border = {
-        top: { style: "thin" },
-        left: { style: "thin" },
-        bottom: { style: "thin" },
-        right: { style: "thin" },
-      };
-      // Asegurar centrado en todas las celdas
-      if (!cell.alignment) {
-        cell.alignment = { horizontal: "center", vertical: "middle" };
-      }
-    }
-  }
-
-  // === Hoja de Contratos ===
-  const wsContratos = workbook.addWorksheet("Contratos");
-  wsContratos.columns = [
-    { header: "Contratos", key: "contrato", width: 45 },
-    { header: "id", key: "id", width: 8 },
-    { header: "Contrato_Jornada", key: "contrato_jornada", width: 20 },
-  ];
-
-  const headerContratos = wsContratos.getRow(1);
-  headerContratos.font = { bold: true };
-  headerContratos.alignment = { horizontal: "center", vertical: "middle" };
-
-  const contratos = [
-    "1 | SET_SURA - MESA DE AYUDA",
-    "2 | U0809-01-SET_SANVICENTE MESA",
-    "3 | C-U768-01-SET_STOP_MESATI",
-    "4 | 6063104030-MESA DE AYUDA MAYA",
-    "5 | C-U620-01-SET_COMFAMA_MESATI",
-    "6 | U0537-05-SET_GCO_MESA D AYUDA",
-    "7 | U0537-05-SET_GCO_SOPORTES",
-    "8 | C-U620-01-SET_COMFAMA SOPORTE",
-    "9 | U0377-04-SET_SURA_SOPORTE SIT",
-    "10 | U0377-06-SET_SURA_SOPORTE SIT",
-  ];
-
-  contratos.forEach((c, idx) => {
-    const row = wsContratos.addRow({
-      contrato: c,
-      id: idx + 1,
-      contrato_jornada: `_jornadas_${idx + 1}`,
-    });
-    row.alignment = { horizontal: "center", vertical: "middle" };
-  });
-
-  // === Hoja de Jornadas ===
-  const wsJornadas = workbook.addWorksheet("Jornadas");
-
-  const jornadasComunes = [
-    "1 | 05:00 - 12:00",
-    "2 | 06:00 - 12:00",
-    "3 | 06:00 - 13:00",
-    "4 | 06:00 - 14:00",
-    "5 | 06:00 - 14:00 D 1h",
-    "6 | 06:00 - 15:00 D 1h",
-    "7 | 06:00 - 15:30 D 1h",
-    "8 | 06:00 - 16:00 D 1h",
-    "9 | 06:30 - 14:30",
-    "10 | 06:30 - 15:30 D 1h",
-    "11 | 07:00 - 12:00",
-    "12 | 07:00 - 13:00",
-    "13 | 07:00 - 14:00",
-    "14 | 07:00 - 15:00",
-    "15 | 07:00 - 15:30 D 1h",
-    "16 | 07:00 - 16:00 D 1h",
-    "17 | 07:00 - 16:30 D 1h",
-    "18 | 07:00 - 17:00 D 1h",
-    "19 | 07:30 - 15:00",
-    "20 | 07:30 - 15:30",
-    "21 | 07:30 - 16:30 D 1h",
-    "22 | 07:30 - 17:00 D 1h",
-    "23 | 07:30 - 17:30 D 1h",
-    "24 | 08:00 - 15:00",
-    "25 | 08:00 - 16:00",
-    "26 | 08:00 - 17:00 D 1h",
-    "27 | 08:00 - 17:30 D 1h",
-    "28 | 08:00 - 18:00 D 1h",
-    "29 | 08:30 - 17:30 D 1h",
-    "30 | 08:30 - 18:00 D 1h",
-    "31 | 09:00 - 15:00",
-    "32 | 09:00 - 18:00 D 1h",
-    "33 | 10:00 - 16:00",
-    "34 | 14:00 - 21:00",
-    "35 | 14:00 - 21:30",
-    "36 | 14:30 - 22:00",
-    "37 | 15:00 - 22:00",
-    "38 | 21:00 - 06:00",
-    "39 | 22:00 - 05:00",
-    "40 | 22:00 - 06:00",
-  ];
-
-  wsJornadas.getCell("A1").value = 1;
-  wsJornadas.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
-  
-  jornadasComunes.forEach((j, idx) => {
-    const cell = wsJornadas.getCell(idx + 2, 1);
-    cell.value = j;
-    cell.alignment = { horizontal: "center", vertical: "middle" };
-  });
-
-  // Retornar como Buffer en lugar de escribir a archivo
-  const buffer = await workbook.xlsx.writeBuffer();
-  console.log(`  📄 Plantilla Prometeo generada (${buffer.length} bytes)`);
-  return buffer;
-}
-
-// ============================================
-// FUNCIONES DE FORMATO
-// ============================================
-
-/**
- * Convierte HH:MM (24h) a formato "H:MM:00 a.\u00a0m." o "H:MM:00 p.\u00a0m."
- * Formato de la PRIMERA hora en un rango (sin leading zero, con NBSP)
- * Ejemplo: "06:00" → "6:00:00 a.\u00a0m.", "17:00" → "5:00:00 p.\u00a0m."
- */
-function formatHora12_first(hora) {
-  if (!hora) return "";
-  const parts = hora.split(":");
-  if (parts.length < 2) return hora;
-
-  let h = parseInt(parts[0]);
-  const m = parseInt(parts[1]);
-  if (isNaN(h) || isNaN(m)) return hora;
-
-  const suffix = h >= 12 ? `p.${NBSP}m.` : `a.${NBSP}m.`;
-  const h12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
-  return `${h12}:${String(m).padStart(2, "0")}:00 ${suffix}`;
-}
-
-/**
- * Convierte HH:MM (24h) a formato "HH:MM: 00 a.m" o "HH:MM: 00 p.m"
- * Formato de la SEGUNDA hora en un rango (con leading zero, espacio antes de 00, sin NBSP)
- * Ejemplo: "10:00" → "10:00: 00 a.m", "22:00" → "10:00: 00 p.m"
- */
-function formatHora12_second(hora) {
-  if (!hora) return "";
-  const parts = hora.split(":");
-  if (parts.length < 2) return hora;
-
-  let h = parseInt(parts[0]);
-  const m = parseInt(parts[1]);
-  if (isNaN(h) || isNaN(m)) return hora;
-
-  const suffix = h >= 12 ? "p.m" : "a.m";
-  const h12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
-  return `${String(h12).padStart(2, "0")}:${String(m).padStart(2, "0")}: 00 ${suffix}`;
-}
-
-/**
- * Formatea un rango de horas para la Plantilla Prometeo
- * "7:42:00 a.\u00a0m. -  06:00: 00 p.m"
- * Primer hora usa formatHora12_first, segunda usa formatHora12_second
- */
-function formatRangoPlantilla(horaInicio, horaFin) {
-  if (!horaInicio || !horaFin) return "";
-  return `${formatHora12_first(horaInicio)} -  ${formatHora12_second(horaFin)}`;
-}
-
-/**
- * Formatea un rango de horas para el Formato Turnos (columnas Hora Inicio/Fin en split)
- * Mismo formato que Plantilla: "6:00:00 a.\u00a0m. -  10:00: 00 a.m"
- */
-function formatRangoFormatoTurnos(horaInicio, horaFin) {
-  if (!horaInicio || !horaFin) return "";
-  return `${formatHora12_first(horaInicio)} -  ${formatHora12_second(horaFin)}`;
-}
-
-/**
- * Convierte hora HH:MM a un valor numérico de Excel time (fracción del día)
- * Para turnos normales en Formato Turnos
- * Ejemplo: "07:42" → 0.32083... (que Excel muestra como 7:42)
- */
-function formatTimeAsExcelTime(hora) {
-  if (!hora) return "";
-  const parts = hora.split(":");
-  if (parts.length < 2) return hora;
-
-  const h = parseInt(parts[0]);
-  const m = parseInt(parts[1]);
-  if (isNaN(h) || isNaN(m)) return hora;
-
-  // Excel time = (hours * 60 + minutes) / (24 * 60)
-  return (h * 60 + m) / 1440;
-}
-
-/**
- * Formatea el almuerzo en formato 12h para el Formato Turnos
- * "12:00 - 13:00" → "12:00 pm - 1:00 pm"
- * "13:00 - 14:00" → "1:00 pm - 2:00 pm"
- */
-function formatAlmuerzo12h(almuerzoStr) {
-  if (!almuerzoStr || almuerzoStr === "null" || almuerzoStr === "n/a") return "";
-
-  const match = almuerzoStr.match(
-    /(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/
-  );
-  if (!match) return almuerzoStr;
-
-  let h1 = parseInt(match[1]);
-  const m1 = parseInt(match[2]);
-  let h2 = parseInt(match[3]);
-  const m2 = parseInt(match[4]);
-
-  const suffix1 = h1 >= 12 ? "pm" : "am";
-  const suffix2 = h2 >= 12 ? "pm" : "am";
-  const h1_12 = h1 > 12 ? h1 - 12 : h1 === 0 ? 12 : h1;
-  const h2_12 = h2 > 12 ? h2 - 12 : h2 === 0 ? 12 : h2;
-
-  return `${h1_12}:${String(m1).padStart(2, "0")} ${suffix1} - ${h2_12}:${String(m2).padStart(2, "0")} ${suffix2}`;
-}
-
-/**
- * Formato del nombre del agente para Formato Turnos (Title Case)
- */
-function formatNombreAgente(nombre) {
-  if (!nombre) return "";
-  return nombre
-    .split(" ")
-    .map((word) => {
-      if (["DE", "DEL", "LA", "LAS", "LOS", "Y"].includes(word.toUpperCase())) {
-        return word.toLowerCase();
-      }
-      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      return updated
     })
-    .join(" ");
-}
+  }
 
-/**
- * Formato del nombre del supervisor para Formato Turnos (Title Case)
- */
-function formatNombreSupervisor(nombre) {
-  if (!nombre) return "";
-  return nombre
-    .split(" ")
-    .map((word) => {
-      if (["DE", "DEL", "LA", "LAS", "LOS", "Y"].includes(word.toUpperCase())) {
-        return word.toLowerCase();
+  const deleteTurno = (index) => {
+    setTurnos(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const addTurno = () => {
+    const newTurno = {
+      cedula: '',
+      nombre: '',
+      fecha: metadata.fechaInicio || '',
+      diaSemana: '',
+      horaInicio: '07:00',
+      horaFin: '17:00',
+      esDescanso: false,
+      esIncapacidad: false,
+      motivoAusencia: null,
+      esSplit: false,
+      splitHoraInicio2: null,
+      splitHoraFin2: null,
+      almuerzo: '12:00 - 13:00',
+      campana: metadata.campana || '',
+      jornada: '07:00 - 17:00 D 1h',
+    }
+    setTurnos(prev => [...prev, newTurno])
+    setEditingRow(turnos.length)
+  }
+
+  const handleGenerate = async () => {
+    setIsGenerating(true)
+    onError(null)
+
+    try {
+      const response = await axios.post(`${API_URL}/api/generate`, {
+        scheduleData: turnos,
+        metadata,
+        imagenesPaths: data.imagenesPaths || [],
+      })
+
+      if (response.data.success) {
+        onConfirm(response.data.files)
+      } else {
+        onError(response.data.error || 'Error generando los archivos')
       }
-      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-    })
-    .join(" ");
+    } catch (err) {
+      const message = err.response?.data?.error || err.message
+      onError(message)
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  return (
+    <div className="animate-fade-in space-y-6">
+      {/* Metadata Section */}
+      <div className="glass-card p-6">
+        <h2 className="font-display font-bold text-lg text-surface-100 mb-4 flex items-center gap-2">
+          <Edit3 className="w-5 h-5 text-brand-400" />
+          Información General
+        </h2>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-xs font-mono text-surface-400 mb-1.5">Supervisor / Líder</label>
+            <input
+              type="text"
+              value={metadata.supervisor || ''}
+              onChange={(e) => setMetadata(prev => ({ ...prev, supervisor: e.target.value }))}
+              className="input-field"
+              placeholder="Nombre del supervisor"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-mono text-surface-400 mb-1.5">Campaña</label>
+            <input
+              type="text"
+              value={metadata.campana || ''}
+              onChange={(e) => setMetadata(prev => ({ ...prev, campana: e.target.value }))}
+              className="input-field"
+              placeholder="Nombre de la campaña"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-mono text-surface-400 mb-1.5">Contrato</label>
+            <input
+              type="text"
+              value={metadata.contrato || ''}
+              onChange={(e) => setMetadata(prev => ({ ...prev, contrato: e.target.value }))}
+              className="input-field"
+              placeholder="Código del contrato"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-mono text-surface-400 mb-1.5">Semana</label>
+            <input
+              type="text"
+              value={metadata.semana || ''}
+              onChange={(e) => setMetadata(prev => ({ ...prev, semana: e.target.value }))}
+              className="input-field"
+              placeholder="del X al Y de mes"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+        {[
+          { label: 'Agentes', value: stats.agentes, icon: <Users className="w-4 h-4" />, color: 'text-brand-400' },
+          { label: 'Días', value: stats.dias, icon: <CalendarDays className="w-4 h-4" />, color: 'text-blue-400' },
+          { label: 'Turnos', value: stats.total, icon: '📋', color: 'text-surface-200' },
+          { label: 'Descansos', value: stats.descansos, icon: '😴', color: 'text-amber-400' },
+          { label: 'Split', value: stats.splits, icon: '⏰', color: 'text-purple-400' },
+          { label: 'Incapacidad', value: stats.incapacidades, icon: '🏥', color: 'text-orange-400' },
+          { label: 'Advertencias', value: stats.warnings, icon: <AlertTriangle className="w-4 h-4" />, color: stats.warnings > 0 ? 'text-red-400' : 'text-emerald-400' },
+        ].map((s) => (
+          <div key={s.label} className="glass-card-light p-3 text-center">
+            <div className={`flex items-center justify-center gap-1.5 mb-1 ${s.color}`}>
+              {typeof s.icon === 'string' ? <span>{s.icon}</span> : s.icon}
+              <span className="font-display font-bold text-xl">{s.value}</span>
+            </div>
+            <span className="text-xs text-surface-500 font-mono">{s.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {stats.warnings > 0 && (
+        <div className="glass-card border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm text-amber-300 font-medium">
+              Se encontraron {stats.warnings} campos con datos inciertos (marcados con ???)
+            </p>
+            <p className="text-xs text-surface-400 mt-1">
+              Revisa y corrige los campos resaltados en rojo antes de generar los archivos.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {stats.incapacidades > 0 && (
+        <div className="glass-card border-orange-500/30 bg-orange-500/5 p-4 flex items-start gap-3">
+          <span className="text-lg shrink-0">🏥</span>
+          <div>
+            <p className="text-sm text-orange-300 font-medium">
+              Se detectaron {stats.incapacidades} día(s) de incapacidad/ausencia
+            </p>
+            <p className="text-xs text-surface-400 mt-1">
+              Estos días se marcarán como no laborados en los archivos Excel con el motivo correspondiente.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Data Table */}
+      <div className="glass-card overflow-hidden">
+        <div className="flex items-center justify-between p-4 border-b border-surface-800/50">
+          <h2 className="font-display font-bold text-lg text-surface-100">
+            Turnos Extraídos ({turnos.length})
+          </h2>
+          <button onClick={addTurno} className="btn-secondary flex items-center gap-2 text-sm">
+            <Plus className="w-4 h-4" />
+            Agregar turno
+          </button>
+        </div>
+
+        <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+          <table className="w-full min-w-[1300px]">
+            <thead className="sticky top-0 z-10 bg-surface-900/95 backdrop-blur">
+              <tr className="text-xs font-mono text-surface-400 uppercase tracking-wider">
+                <th className="table-cell text-left w-10">#</th>
+                <th className="table-cell text-left">Cédula</th>
+                <th className="table-cell text-left">Nombre</th>
+                <th className="table-cell text-left">Fecha</th>
+                <th className="table-cell text-left">Día</th>
+                <th className="table-cell text-center">Inicio</th>
+                <th className="table-cell text-center">Fin</th>
+                <th className="table-cell text-center">Almuerzo</th>
+                <th className="table-cell text-center">Split</th>
+                <th className="table-cell text-center">Descanso</th>
+                <th className="table-cell text-center">Incap.</th>
+                <th className="table-cell text-center">Motivo</th>
+                <th className="table-cell text-center">Campaña</th>
+                <th className="table-cell text-center w-20">Acc.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {turnos.map((turno, idx) => {
+                const isEditing = editingRow === idx
+                const hasWarning = (turno.nombre || '').includes('???') ||
+                  (turno.cedula || '').includes('???') ||
+                  (turno.horaInicio || '').includes('???')
+                const isIncapacidad = turno.esIncapacidad
+
+                return (
+                  <tr
+                    key={idx}
+                    className={`transition-colors ${
+                      isIncapacidad ? 'bg-orange-500/5' :
+                      hasWarning ? 'bg-red-500/5' :
+                      turno.esDescanso ? 'bg-amber-500/5' :
+                      idx % 2 === 0 ? 'bg-transparent' : 'bg-surface-900/20'
+                    } hover:bg-surface-800/30`}
+                  >
+                    <td className="table-cell text-surface-500 font-mono text-xs">{idx + 1}</td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={turno.cedula || ''}
+                        onChange={(e) => updateTurno(idx, 'cedula', e.target.value)}
+                        className={`input-field text-xs py-1.5 ${hasWarning && (turno.cedula || '').includes('???') ? 'border-red-500/50' : ''}`}
+                      />
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={turno.nombre || ''}
+                        onChange={(e) => updateTurno(idx, 'nombre', e.target.value)}
+                        className={`input-field text-xs py-1.5 min-w-[180px] ${hasWarning && (turno.nombre || '').includes('???') ? 'border-red-500/50' : ''}`}
+                      />
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="date"
+                        value={turno.fecha || ''}
+                        onChange={(e) => updateTurno(idx, 'fecha', e.target.value)}
+                        className="input-field text-xs py-1.5"
+                      />
+                    </td>
+
+                    <td className="table-cell text-xs text-surface-300 font-mono">
+                      {turno.diaSemana || getDayName(turno.fecha)}
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.horaInicio || ''}
+                        onChange={(e) => updateTurno(idx, 'horaInicio', e.target.value)}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
+                        className="input-field text-xs py-1.5 text-center w-20 disabled:opacity-40"
+                        placeholder="HH:MM"
+                      />
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.horaFin || ''}
+                        onChange={(e) => updateTurno(idx, 'horaFin', e.target.value)}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
+                        className="input-field text-xs py-1.5 text-center w-20 disabled:opacity-40"
+                        placeholder="HH:MM"
+                      />
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={(turno.esDescanso || turno.esIncapacidad) ? '-' : turno.almuerzo || ''}
+                        onChange={(e) => updateTurno(idx, 'almuerzo', e.target.value)}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
+                        className="input-field text-xs py-1.5 text-center w-32 disabled:opacity-40"
+                        placeholder="HH:MM - HH:MM"
+                      />
+                    </td>
+
+                    <td className="table-cell text-center">
+                      <input
+                        type="checkbox"
+                        checked={turno.esSplit || false}
+                        onChange={(e) => updateTurno(idx, 'esSplit', e.target.checked)}
+                        disabled={turno.esDescanso || turno.esIncapacidad}
+                        className="w-4 h-4 rounded accent-brand-500"
+                      />
+                    </td>
+
+                    <td className="table-cell text-center">
+                      <input
+                        type="checkbox"
+                        checked={turno.esDescanso || false}
+                        onChange={(e) => updateTurno(idx, 'esDescanso', e.target.checked)}
+                        disabled={turno.esIncapacidad}
+                        className="w-4 h-4 rounded accent-amber-500"
+                      />
+                    </td>
+
+                    <td className="table-cell text-center">
+                      <input
+                        type="checkbox"
+                        checked={turno.esIncapacidad || false}
+                        onChange={(e) => updateTurno(idx, 'esIncapacidad', e.target.checked)}
+                        disabled={turno.esDescanso}
+                        className="w-4 h-4 rounded accent-orange-500"
+                      />
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={turno.motivoAusencia || ''}
+                        onChange={(e) => updateTurno(idx, 'motivoAusencia', e.target.value)}
+                        disabled={!turno.esIncapacidad}
+                        className="input-field text-xs py-1.5 text-center w-28 disabled:opacity-40"
+                        placeholder="Motivo"
+                      />
+                    </td>
+
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        value={turno.campana || ''}
+                        onChange={(e) => updateTurno(idx, 'campana', e.target.value)}
+                        className="input-field text-xs py-1.5 text-center w-28"
+                      />
+                    </td>
+
+                    <td className="table-cell text-center">
+                      <button
+                        onClick={() => deleteTurno(idx)}
+                        className="p-1.5 rounded-lg hover:bg-red-500/20 text-surface-500 hover:text-red-400 transition-colors"
+                        title="Eliminar turno"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Split turno details (shown inline when esSplit is checked) */}
+      {turnos.some(t => t.esSplit && !t.esDescanso && !t.esIncapacidad) && (
+        <div className="glass-card p-4">
+          <h3 className="font-display font-semibold text-sm text-purple-300 mb-3 flex items-center gap-2">
+            ⏰ Detalle de Turnos Split
+          </h3>
+          <div className="space-y-2">
+            {turnos.map((turno, idx) => {
+              if (!turno.esSplit || turno.esDescanso || turno.esIncapacidad) return null
+              return (
+                <div key={idx} className="flex items-center gap-3 text-sm glass-card-light p-3">
+                  <span className="font-mono text-surface-400 w-8">#{idx + 1}</span>
+                  <span className="text-surface-300 w-40 truncate">{turno.nombre}</span>
+                  <span className="text-surface-400 text-xs">2do bloque:</span>
+                  <input
+                    type="text"
+                    value={turno.splitHoraInicio2 || ''}
+                    onChange={(e) => updateTurno(idx, 'splitHoraInicio2', e.target.value)}
+                    className="input-field text-xs py-1.5 w-20 text-center"
+                    placeholder="HH:MM"
+                  />
+                  <span className="text-surface-500">—</span>
+                  <input
+                    type="text"
+                    value={turno.splitHoraFin2 || ''}
+                    onChange={(e) => updateTurno(idx, 'splitHoraFin2', e.target.value)}
+                    className="input-field text-xs py-1.5 w-20 text-center"
+                    placeholder="HH:MM"
+                  />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center justify-between pt-4">
+        <button onClick={onBack} className="btn-secondary flex items-center gap-2">
+          <ChevronLeft className="w-4 h-4" />
+          Volver
+        </button>
+
+        <button
+          onClick={handleGenerate}
+          disabled={isGenerating || turnos.length === 0}
+          className="btn-success flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {isGenerating ? (
+            <>
+              <Loader2 className="w-5 h-5 spinner" />
+              Generando archivos...
+            </>
+          ) : (
+            <>
+              <Check className="w-5 h-5" />
+              Confirmar y Generar Excel ({turnos.length} turnos)
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  )
 }
 
-/**
- * Generar nombre de hoja basado en el rango de fechas
- */
-function generarNombreHoja(turnos) {
-  if (!turnos || turnos.length === 0) return "Turnos";
-
-  const fechas = turnos
-    .filter((t) => t.fecha)
-    .map((t) => t.fecha)
-    .sort();
-
-  if (fechas.length === 0) return "Turnos";
-
-  const meses = [
-    "enero", "febrero", "marzo", "abril", "mayo", "junio",
-    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-  ];
-
-  const primera = new Date(fechas[0] + "T00:00:00");
-  const ultima = new Date(fechas[fechas.length - 1] + "T00:00:00");
-
-  const diaInicio = primera.getDate();
-  const diaFin = ultima.getDate();
-  const mes = meses[primera.getMonth()];
-
-  return `del ${diaInicio} al ${diaFin} de ${mes}`;
+function getDayName(dateStr) {
+  if (!dateStr) return ''
+  try {
+    const date = new Date(dateStr + 'T12:00:00')
+    const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+    return days[date.getDay()] || ''
+  } catch {
+    return ''
+  }
 }
-
-module.exports = { generateFormatoTurnos, generatePlantillaPrometeo };
