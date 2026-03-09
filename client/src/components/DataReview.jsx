@@ -180,7 +180,7 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
           { label: 'Días', value: stats.dias, icon: <CalendarDays className="w-4 h-4" />, color: 'text-blue-400' },
           { label: 'Turnos', value: stats.total, icon: '📋', color: 'text-surface-200' },
           { label: 'Descansos', value: stats.descansos, icon: '😴', color: 'text-amber-400' },
-          { label: 'Split', value: stats.splits, icon: '⏰', color: 'text-purple-400' },
+          { label: 'Turno Partido', value: stats.splits, icon: '⏰', color: 'text-purple-400' },
           { label: 'Incapacidad', value: stats.incapacidades, icon: '🏥', color: 'text-orange-400' },
           { label: 'Advertencias', value: stats.warnings, icon: <AlertTriangle className="w-4 h-4" />, color: stats.warnings > 0 ? 'text-red-400' : 'text-emerald-400' },
         ].map((s) => (
@@ -246,7 +246,7 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
                 <th className="table-cell text-center">Inicio</th>
                 <th className="table-cell text-center">Fin</th>
                 <th className="table-cell text-center">Almuerzo</th>
-                <th className="table-cell text-center">Split</th>
+                <th className="table-cell text-center">T. Partido</th>
                 <th className="table-cell text-center">Descanso</th>
                 <th className="table-cell text-center">Incap.</th>
                 <th className="table-cell text-center">Motivo</th>
@@ -409,7 +409,7 @@ export default function DataReview({ data, onConfirm, onBack, onError }) {
       {turnos.some(t => t.esSplit && !t.esDescanso && !t.esIncapacidad) && (
         <div className="glass-card p-4">
           <h3 className="font-display font-semibold text-sm text-purple-300 mb-3 flex items-center gap-2">
-            ⏰ Detalle de Turnos Split
+            ⏰ Detalle de Turnos Partidos
           </h3>
           <div className="space-y-2">
             {turnos.map((turno, idx) => {

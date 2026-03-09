@@ -33,7 +33,7 @@ function buildJornadaPrometeo(turno) {
     const m2 = toPrometeoTime(turno.horaFin);
     const t1 = toPrometeoTime(turno.splitHoraInicio2);
     const t2 = toPrometeoTime(turno.splitHoraFin2);
-    return `${m1} - ${m2} // ${t1} - ${t2} (Turno Partido)`;
+    return `${m1} - ${m2} // ${t1} - ${t2}`;
   }
   const inicio = toPrometeoTime(turno.horaInicio);
   const fin    = toPrometeoTime(turno.horaFin);
@@ -207,7 +207,7 @@ async function generateFormatoTurnos(scheduleData, metadata) {
       almCell.value = null;
     } else if (isSplit) {
       hiCell.value  = `${toHHMM_ampm(turno.horaInicio)} - ${toHHMM_ampm(turno.horaFin)}`;
-      hfCell.value  = `${toHHMM_ampm(turno.splitHoraInicio2)} - ${toHHMM_ampm(turno.splitHoraFin2)} (Turno Partido)`;
+      hfCell.value  = `${toHHMM_ampm(turno.splitHoraInicio2)} - ${toHHMM_ampm(turno.splitHoraFin2)}`;
       hiCell.font   = { ...FONT_FORMATO, color: { argb: "FF7F6000" }, bold: true };
       hfCell.font   = { ...FONT_FORMATO, color: { argb: "FF7F6000" }, bold: true };
       almCell.value = null;
