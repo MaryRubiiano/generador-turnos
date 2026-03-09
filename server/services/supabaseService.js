@@ -207,14 +207,22 @@ async function eliminarAnalisis(id) {
 
 /**
  * Normaliza un nombre para comparación:
- * - Quita acentos, pasa a mayúsculas, elimina caracteres especiales
+ * - Reemplaza ñ→N, caracteres con tilde→letra base
+ * - Pasa a mayúsculas, elimina caracteres especiales
+ * Funciona en ambas direcciones: "Piñeros" y "Pineros" quedan igual → "PINEROS"
  */
 function normalizarNombre(nombre) {
   return String(nombre || "")
     .toUpperCase()
+    // Primero reemplazar ñ/Ñ explícitamente antes de NFD (NFD la convierte a N + combining ~)
+    .replace(/Ñ/g, "N")
+    .replace(/ñ/g, "N")
+    // Normalizar forma NFD para separar letras de sus acentos
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
-    .replace(/[^A-Z\s]/g, "")         // solo letras y espacios
+    // Quitar todos los diacríticos (acentos, tildes, etc.)
+    .replace(/[\u0300-\u036f]/g, "")
+    // Solo letras A-Z y espacios
+    .replace(/[^A-Z\s]/g, "")
     .trim()
     .replace(/\s+/g, " ");
 }

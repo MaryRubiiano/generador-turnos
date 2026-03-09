@@ -28,14 +28,22 @@ function toTitleCase(str) {
 
 /**
  * Normaliza nombre para comparación:
- * quita acentos, mayúsculas, caracteres especiales, espacios múltiples
+ * - Reemplaza ñ→N ANTES de NFD (para que no quede como N + tilde combinado)
+ * - Quita acentos, tildes, caracteres especiales
+ * - Resultado: "Piñeros" = "Pineros", "José" = "JOSE"
  */
 function normalizeName(name) {
   return String(name)
     .toUpperCase()
+    // Reemplazar ñ/Ñ explícitamente antes de NFD
+    .replace(/Ñ/g, "N")
+    .replace(/ñ/g, "N")
+    // Descomponer caracteres con diacríticos (á → a + combining accent)
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
-    .replace(/[^A-Z\s]/g, "") // solo letras y espacios
+    // Eliminar todos los diacríticos (acentos, tildes, etc.)
+    .replace(/[\u0300-\u036f]/g, "")
+    // Solo letras A-Z y espacios
+    .replace(/[^A-Z\s]/g, "")
     .trim()
     .replace(/\s+/g, " ");
 }
@@ -54,7 +62,6 @@ async function loadCatalog() {
   catalogCache = new Map();
 
   // --- Paso 1: Formato Turnos Programados.xlsx ---
-  // Columnas: Fecha | Cedula | Nombre Agente | Campaña | Supervisor | ...
   try {
     const wb1 = new ExcelJS.Workbook();
     await wb1.xlsx.readFile(
@@ -73,32 +80,26 @@ async function loadCatalog() {
         if (!catalogCache.has(cedula)) {
           catalogCache.set(cedula, {
             cedula,
-            nombreCorto: nombreLimpio,       // "Cristian Mateo Pataquiva Bello"
-            nombreCompleto: nombreLimpio.toUpperCase(), // se actualiza con Prometeo
+            nombreCorto: nombreLimpio,
+            nombreCompleto: nombreLimpio.toUpperCase(),
             campana: String(campana || "").trim(),
             contrato: "",
           });
         }
       }
     }
-    console.log(
-      `📚 Agentes desde Formato Turnos: ${catalogCache.size}`
-    );
+    console.log(`📚 Agentes desde Formato Turnos: ${catalogCache.size}`);
   } catch (e) {
     console.warn("⚠️  No se pudo leer Formato Turnos Programados.xlsx:", e.message);
   }
 
   // --- Paso 2: Plantilla Prometeo.xlsx ---
-  // Columnas: Cédula | Nombre | Contrato | Jornada | Fecha | Lider
   try {
     const wb2 = new ExcelJS.Workbook();
     await wb2.xlsx.readFile(
-      path.join(
-        M_EXCEL_DIR,
-        "PLANTILLA DE PROGRAMACION TURNOS PROMETEO.xlsx"
-      )
+      path.join(M_EXCEL_DIR, "PLANTILLA DE PROGRAMACION TURNOS PROMETEO.xlsx")
     );
-    const sheet = wb2.worksheets[0]; // Solo primera hoja
+    const sheet = wb2.worksheets[0];
 
     for (let r = 2; r <= sheet.rowCount; r++) {
       const row = sheet.getRow(r);
@@ -111,10 +112,9 @@ async function loadCatalog() {
         const nombreCorto = toTitleCase(nombreCompleto);
 
         if (catalogCache.has(cedula)) {
-          // Actualizar datos existentes con nombre completo y contrato
           const ag = catalogCache.get(cedula);
-          ag.nombreCompleto = nombreCompleto;  // "CRISTIAN MATEO PATAQUIVA BELLO"
-          ag.nombreCorto = nombreCorto;        // "Cristian Mateo Pataquiva Bello"
+          ag.nombreCompleto = nombreCompleto;
+          ag.nombreCorto = nombreCorto;
           if (!ag.contrato && contrato) ag.contrato = String(contrato).trim();
         } else {
           catalogCache.set(cedula, {
@@ -127,9 +127,7 @@ async function loadCatalog() {
         }
       }
     }
-    console.log(
-      `📚 Catálogo final cargado: ${catalogCache.size} agentes desde M_Excel`
-    );
+    console.log(`📚 Catálogo final cargado: ${catalogCache.size} agentes desde M_Excel`);
   } catch (e) {
     console.warn(
       "⚠️  No se pudo leer PLANTILLA DE PROGRAMACION TURNOS PROMETEO.xlsx:",
@@ -141,37 +139,62 @@ async function loadCatalog() {
 }
 
 // ============================================================
-// Matching por nombre
+// Matching por nombre (mejorado para nombres colombianos)
 // ============================================================
+
+const PREPOSICIONES = new Set(["DE", "DEL", "LA", "LAS", "LOS", "EL", "Y", "E"]);
+
+/**
+ * Extrae palabras significativas (más de 2 letras, no preposiciones)
+ */
+function palabrasSignificativas(nombre) {
+  return normalizeName(nombre)
+    .split(" ")
+    .filter((p) => p.length > 2 && !PREPOSICIONES.has(p));
+}
 
 /**
  * Busca el mejor agente en el catálogo por similitud de nombre.
- * Estrategia: palabras en común (mínimo 2, o el 40% del query).
+ * Normaliza ñ y tildes en ambos lados antes de comparar.
+ * Ej: "Daniel Piñeros" → normaliza a "DANIEL PINEROS" → encuentra "DANIEL PIÑEROS" en BD
  */
 function findByName(extractedName, catalog) {
-  const queryWords = normalizeName(extractedName)
-    .split(" ")
-    .filter((w) => w.length > 2);
+  const queryWords = palabrasSignificativas(extractedName);
 
   if (!queryWords.length) return null;
 
   let bestMatch = null;
   let bestScore = 0;
+
+  // Mínimo requerido: 2 palabras coinciden o 40% del query
   const minMatches = Math.max(2, Math.ceil(queryWords.length * 0.4));
 
   for (const [, agent] of catalog) {
-    const catalogWords = normalizeName(
+    const catalogWords = palabrasSignificativas(
       agent.nombreCompleto || agent.nombreCorto || ""
-    ).split(" ");
+    );
 
-    const matchCount = queryWords.filter((w) =>
-      catalogWords.includes(w)
-    ).length;
+    // Contar coincidencias (comparación normalizada)
+    let matchCount = 0;
+    for (const qw of queryWords) {
+      if (catalogWords.some((cw) => cw === qw || cw.startsWith(qw) || qw.startsWith(cw))) {
+        matchCount++;
+      }
+    }
 
     const score = matchCount / queryWords.length;
 
-    if (matchCount >= minMatches && score > bestScore) {
-      bestScore = score;
+    // Verificar que el apellido coincide (última palabra del query)
+    const apellidoQuery = queryWords[queryWords.length - 1];
+    const apellidoCoincide = catalogWords.some((cw) => cw === apellidoQuery);
+
+    // Requerir mínimo coincidencias O apellido coincide
+    if (matchCount < minMatches && !apellidoCoincide) continue;
+
+    const scoreFinal = apellidoCoincide ? Math.min(1, score + 0.2) : score;
+
+    if (scoreFinal > bestScore && scoreFinal >= 0.4) {
+      bestScore = scoreFinal;
       bestMatch = agent;
     }
   }
@@ -206,8 +229,8 @@ async function enriquecerLocal(turnos, metadata) {
     return {
       ...turno,
       cedula: String(agent.cedula),
-      nombre: agent.nombreCorto,         // Title Case para Formato Turnos
-      _nombreCompleto: agent.nombreCompleto, // ALL CAPS para Prometeo (interno)
+      nombre: agent.nombreCorto,
+      _nombreCompleto: agent.nombreCompleto,
       contrato: turno.contrato || agent.contrato || "",
       campana: turno.campana || agent.campana || "",
     };
