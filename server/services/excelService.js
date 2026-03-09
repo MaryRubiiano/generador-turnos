@@ -13,23 +13,6 @@ function timeStrToExcelDate(timeStr) {
   return new Date(Date.UTC(1899, 11, 30, h, m, 0));
 }
 
-/** "13:00" → "1:00 PM" */
-function to12h(timeStr) {
-  if (!timeStr) return "";
-  const match = String(timeStr).match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return timeStr;
-  const h = parseInt(match[1]);
-  const m = parseInt(match[2]);
-  const suf = h >= 12 ? "PM" : "AM";
-  const h12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
-  return `${h12}:${String(m).padStart(2, "0")} ${suf}`;
-}
-
-/**
- * "07:42" → "7:42:00 a. m."
- * "18:00" → "6:00:00 p. m."
- * Formato exacto que usa Prometeo
- */
 function toPrometeoTime(timeStr) {
   if (!timeStr) return "";
   const match = String(timeStr).match(/^(\d{1,2}):(\d{2})$/);
@@ -42,35 +25,22 @@ function toPrometeoTime(timeStr) {
   return `${h12}:${String(m).padStart(2, "0")}:00 ${suf}`;
 }
 
-/**
- * Construye la jornada para Prometeo:
- * - Turno normal:  "7:42:00 a. m. - 6:00:00 p. m."
- * - Turno split:   "6:00:00 a. m. - 10:00:00 a. m // 5:00:00 p. m. - 10:00:00 p. m"
- * - Turno partido (split) entre paréntesis en etiqueta pero misma estructura
- * - Descanso: "Descanso"
- * - Incapacidad: "INCAPACIDAD" (o el motivo)
- * SIN el "D 1h" de almuerzo — Prometeo no lo usa en la columna Jornada
- */
 function buildJornadaPrometeo(turno) {
   if (turno.esDescanso) return "Descanso";
   if (turno.esIncapacidad) return (turno.motivoAusencia || "INCAPACIDAD").toUpperCase();
-
   if (turno.esSplit) {
     const m1 = toPrometeoTime(turno.horaInicio);
     const m2 = toPrometeoTime(turno.horaFin);
     const t1 = toPrometeoTime(turno.splitHoraInicio2);
     const t2 = toPrometeoTime(turno.splitHoraFin2);
-    return `${m1} - ${m2} // ${t1} - ${t2}`;
+    return `${m1} - ${m2} // ${t1} - ${t2} (Turno Partido)`;
   }
-
-  // Turno normal: solo inicio - fin, SIN almuerzo
   const inicio = toPrometeoTime(turno.horaInicio);
-  const fin = toPrometeoTime(turno.horaFin);
+  const fin    = toPrometeoTime(turno.horaFin);
   if (!inicio || !fin) return turno.jornada || "";
   return `${inicio} - ${fin}`;
 }
 
-/** "13:00 - 14:00" → "1:00 pm - 2:00 pm" (formato referencia) */
 function almuerzoA12h(almuerzoStr) {
   if (!almuerzoStr || almuerzoStr === "null" || almuerzoStr === "n/a") return null;
   if (!/\d/.test(String(almuerzoStr))) return null;
@@ -86,20 +56,17 @@ function almuerzoA12h(almuerzoStr) {
   return `${fmt(h1, m1)} - ${fmt(h2, m2)}`;
 }
 
-/** Cédula como número entero */
 function cedulaNum(cedula) {
   if (!cedula || cedula === "???") return "";
   const n = parseInt(String(cedula).replace(/\D/g, ""), 10);
   return isNaN(n) ? "" : n;
 }
 
-/** "YYYY-MM-DD" → Date (mediodía UTC) */
 function parseFecha(fechaStr) {
   if (!fechaStr) return null;
   return new Date(fechaStr + "T12:00:00Z");
 }
 
-/** "HH:MM" → "H:MM AM/PM" limpio para splits en Formato Turnos */
 function toHHMM_ampm(timeStr) {
   if (!timeStr) return "";
   const match = String(timeStr).match(/^(\d{1,2}):(\d{2})$/);
@@ -111,12 +78,8 @@ function toHHMM_ampm(timeStr) {
   return `${String(h12).padStart(2, "0")}:${String(m).padStart(2, "0")} ${suf}`;
 }
 
-/** Nombre del sheet Prometeo: "del X al Y de mes" */
 function calcSheetName(scheduleData) {
-  const MESES = [
-    "enero", "febrero", "marzo", "abril", "mayo", "junio",
-    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-  ];
+  const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
   const fechas = scheduleData.map((t) => t.fecha).filter(Boolean).sort();
   if (!fechas.length) return "Programacion Turnos";
   const ini = new Date(fechas[0] + "T12:00:00Z");
@@ -125,29 +88,32 @@ function calcSheetName(scheduleData) {
 }
 
 // ============================================
-// CONSTANTES DE ESTILO
+// ESTILOS
 // ============================================
 
-const FONT_FORMATO     = { name: "Aptos Narrow", size: 11 };
-const FONT_FORMATO_HDR = { name: "Aptos Narrow", size: 11, bold: true, color: { theme: 0 } };
-const FONT_PROMETEO    = { name: "Calibri", size: 11 };
-const FONT_PROMETEO_HDR = { name: "Calibri", size: 11, bold: true };
-
-const ALIGN_CENTER = { horizontal: "center", vertical: "middle" };
-const ALIGN_LEFT   = { horizontal: "left" };
+const ALIGN_CENTER = { horizontal: "center", vertical: "middle", wrapText: false };
+const ALIGN_LEFT   = { horizontal: "left",   vertical: "middle", wrapText: false };
+const ALIGN_RIGHT  = { horizontal: "right",  vertical: "middle", wrapText: false };
 
 const THIN_BORDER = {
-  top:    { style: "thin" },
-  bottom: { style: "thin" },
-  left:   { style: "thin" },
-  right:  { style: "thin" },
+  top:    { style: "thin", color: { argb: "FFB0B0B0" } },
+  bottom: { style: "thin", color: { argb: "FFB0B0B0" } },
+  left:   { style: "thin", color: { argb: "FFB0B0B0" } },
+  right:  { style: "thin", color: { argb: "FFB0B0B0" } },
 };
 
-const HDR_FILL_FORMATO = {
-  type:    "pattern",
-  pattern: "solid",
-  fgColor: { theme: 3, tint: 0.249977111117893 },
-};
+const FONT_FORMATO      = { name: "Aptos Narrow", size: 10 };
+const FONT_FORMATO_HDR  = { name: "Aptos Narrow", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+const FONT_PROMETEO     = { name: "Calibri", size: 10 };
+const FONT_PROMETEO_HDR = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+
+const HDR_FILL_FORMATO  = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2E75B6" } };
+const HDR_FILL_PROMETEO = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F3864" } };
+const ROW_FILL_ODD      = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+const ROW_FILL_EVEN     = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F7FC" } };
+const FILL_DESCANSO     = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
+const FILL_SPLIT        = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
+const FILL_INCAPACIDAD  = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFCE4D6" } };
 
 // ============================================
 // ARCHIVO 1: FORMATO TURNOS PROGRAMADOS
@@ -158,25 +124,26 @@ async function generateFormatoTurnos(scheduleData, metadata) {
   workbook.creator = "Generador de Turnos";
   workbook.created = new Date();
 
-  const sheet = workbook.addWorksheet("Hoja1");
+  const sheet = workbook.addWorksheet("Turnos Programados");
 
   const columns = [
-    { header: "Fecha",             width: 21.7265625  },
-    { header: "Cedula",            width: 11.26953125 },
-    { header: "Nombre Agente",     width: 29.1796875  },
-    { header: "Campaña",           width: 15.81640625 },
-    { header: "Supervisor",        width: 16.54296875 },
-    { header: "Hora Inicio Turno", width: 25.7265625  },
-    { header: "Hora Fin Turno",    width: 25.7265625  },
-    { header: "Almuerzo",          width: 16.453125   },
+    { header: "Fecha",             width: 14 },
+    { header: "Cédula",            width: 14 },
+    { header: "Nombre Agente",     width: 32 },
+    { header: "Campaña",           width: 18 },
+    { header: "Supervisor",        width: 24 },
+    { header: "Hora Inicio Turno", width: 28 },
+    { header: "Hora Fin Turno",    width: 34 },
+    { header: "Almuerzo",          width: 18 },
   ];
 
   sheet.columns = columns.map((c) => ({ width: c.width }));
+  sheet.getRow(1).height = 22;
 
-  // ---- ENCABEZADOS (fila 1) ----
+  // Encabezados
   const headerRow = sheet.getRow(1);
   columns.forEach((col, i) => {
-    const cell = headerRow.getCell(i + 1);
+    const cell     = headerRow.getCell(i + 1);
     cell.value     = col.header;
     cell.font      = FONT_FORMATO_HDR;
     cell.fill      = HDR_FILL_FORMATO;
@@ -184,85 +151,67 @@ async function generateFormatoTurnos(scheduleData, metadata) {
     cell.border    = THIN_BORDER;
   });
 
-  // ---- DATOS (desde fila 2) ----
-  const sorted = [...scheduleData].sort((a, b) => {
-    if (a.fecha < b.fecha) return -1;
-    if (a.fecha > b.fecha) return 1;
-    return 0;
-  });
+  // Datos
+  const sorted = [...scheduleData].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
 
   sorted.forEach((turno, idx) => {
     const row = sheet.getRow(2 + idx);
+    row.height = 18;
+
     const isDescanso    = turno.esDescanso === true;
     const isIncapacidad = turno.esIncapacidad === true;
+    const isSplit       = turno.esSplit === true;
 
-    const applyDataCell = (cell) => {
-      cell.font   = FONT_FORMATO;
-      cell.border = THIN_BORDER;
+    let rowFill = idx % 2 === 0 ? ROW_FILL_ODD : ROW_FILL_EVEN;
+    if (isDescanso)    rowFill = FILL_DESCANSO;
+    if (isSplit)       rowFill = FILL_SPLIT;
+    if (isIncapacidad) rowFill = FILL_INCAPACIDAD;
+
+    const applyCell = (cell, align = ALIGN_CENTER) => {
+      cell.font = FONT_FORMATO; cell.border = THIN_BORDER;
+      cell.fill = rowFill;      cell.alignment = align;
     };
 
-    // Col 1 - Fecha
     const fechaCell = row.getCell(1);
-    fechaCell.value     = parseFecha(turno.fecha);
-    fechaCell.numFmt    = "mm-dd-yy";
-    fechaCell.alignment = ALIGN_CENTER;
-    applyDataCell(fechaCell);
+    fechaCell.value = parseFecha(turno.fecha); fechaCell.numFmt = "dd/mm/yyyy";
+    applyCell(fechaCell);
 
-    // Col 2 - Cedula
     const cedCell = row.getCell(2);
-    cedCell.value     = cedulaNum(turno.cedula);
-    cedCell.alignment = ALIGN_CENTER;
-    applyDataCell(cedCell);
+    cedCell.value = cedulaNum(turno.cedula);
+    applyCell(cedCell);
 
-    // Col 3 - Nombre Agente
     const nomCell = row.getCell(3);
-    nomCell.value     = turno.nombre || "";
-    nomCell.alignment = ALIGN_CENTER;
-    applyDataCell(nomCell);
+    nomCell.value = turno.nombre || "";
+    applyCell(nomCell, ALIGN_LEFT);
 
-    // Col 4 - Campaña
     const campCell = row.getCell(4);
-    campCell.value     = turno.campana || metadata?.campana || "";
-    campCell.alignment = ALIGN_CENTER;
-    applyDataCell(campCell);
+    campCell.value = turno.campana || metadata?.campana || "";
+    applyCell(campCell);
 
-    // Col 5 - Supervisor
     const supCell = row.getCell(5);
-    supCell.value     = metadata?.supervisor || "";
-    supCell.alignment = ALIGN_CENTER;
-    applyDataCell(supCell);
+    supCell.value = metadata?.supervisor || "";
+    applyCell(supCell);
 
-    // Col 6 - Hora Inicio Turno
-    const hiCell = row.getCell(6);
-    hiCell.alignment = ALIGN_CENTER;
-    applyDataCell(hiCell);
-
-    // Col 7 - Hora Fin Turno
-    const hfCell = row.getCell(7);
-    hfCell.alignment = ALIGN_CENTER;
-    applyDataCell(hfCell);
-
-    // Col 8 - Almuerzo
-    const almCell = row.getCell(8);
-    almCell.alignment = ALIGN_CENTER;
-    applyDataCell(almCell);
+    const hiCell  = row.getCell(6); applyCell(hiCell);
+    const hfCell  = row.getCell(7); applyCell(hfCell);
+    const almCell = row.getCell(8); applyCell(almCell);
 
     if (isDescanso) {
-      hiCell.value  = "Descanso";
-      hfCell.value  = "Descanso";
+      hiCell.value  = "Descanso"; hiCell.font  = { ...FONT_FORMATO, color: { argb: "FF375623" }, italic: true };
+      hfCell.value  = "Descanso"; hfCell.font  = { ...FONT_FORMATO, color: { argb: "FF375623" }, italic: true };
       almCell.value = null;
     } else if (isIncapacidad) {
-      const motivo = turno.motivoAusencia || "Incapacidad";
-      hiCell.value  = motivo;
-      hfCell.value  = motivo;
+      const motivo  = turno.motivoAusencia || "Incapacidad";
+      hiCell.value  = motivo; hiCell.font  = { ...FONT_FORMATO, color: { argb: "FFC00000" }, bold: true };
+      hfCell.value  = motivo; hfCell.font  = { ...FONT_FORMATO, color: { argb: "FFC00000" }, bold: true };
       almCell.value = null;
-    } else if (turno.esSplit) {
-      // Turno partido: texto en ambas columnas
+    } else if (isSplit) {
       hiCell.value  = `${toHHMM_ampm(turno.horaInicio)} - ${toHHMM_ampm(turno.horaFin)}`;
-      hfCell.value  = `${toHHMM_ampm(turno.splitHoraInicio2)} - ${toHHMM_ampm(turno.splitHoraFin2)}`;
+      hfCell.value  = `${toHHMM_ampm(turno.splitHoraInicio2)} - ${toHHMM_ampm(turno.splitHoraFin2)} (Turno Partido)`;
+      hiCell.font   = { ...FONT_FORMATO, color: { argb: "FF7F6000" }, bold: true };
+      hfCell.font   = { ...FONT_FORMATO, color: { argb: "FF7F6000" }, bold: true };
       almCell.value = null;
     } else {
-      // Turno normal
       const hiDate = timeStrToExcelDate(turno.horaInicio);
       const hfDate = timeStrToExcelDate(turno.horaFin);
       if (hiDate) { hiCell.value = hiDate; hiCell.numFmt = "h:mm AM/PM"; }
@@ -272,10 +221,10 @@ async function generateFormatoTurnos(scheduleData, metadata) {
   });
 
   sheet.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
-  sheet.properties = { defaultRowHeight: 14.5 };
+  sheet.properties = { defaultRowHeight: 18 };
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
 
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 // ============================================
@@ -291,74 +240,89 @@ async function generatePlantillaPrometeo(scheduleData, metadata) {
   const sheet = workbook.addWorksheet(sheetName);
 
   const colsProg = [
-    { header: "Cédula",   width: 11          },
-    { header: "Nombre ",  width: 36          },
-    { header: "Contrato", width: 37.26953125 },
-    { header: "Jornada",  width: 35          }, // más ancho para el formato largo
-    { header: "Fecha",    width: 9.7265625   },
-    { header: "Lider ",   width: 27          },
+    { header: "Cédula",   width: 14 },
+    { header: "Nombre",   width: 34 },
+    { header: "Contrato", width: 38 },
+    { header: "Jornada",  width: 44 },
+    { header: "Fecha",    width: 13 },
+    { header: "Líder",    width: 28 },
   ];
 
   sheet.columns = colsProg.map((c) => ({ width: c.width }));
+  sheet.getRow(1).height = 22;
 
-  // ---- ENCABEZADOS (fila 1) ----
+  // Encabezados
   const hdr = sheet.getRow(1);
   colsProg.forEach((col, i) => {
-    const cell = hdr.getCell(i + 1);
+    const cell     = hdr.getCell(i + 1);
     cell.value     = col.header;
     cell.font      = FONT_PROMETEO_HDR;
-    cell.alignment = { horizontal: "center" };
+    cell.fill      = HDR_FILL_PROMETEO;
+    cell.alignment = ALIGN_CENTER;
+    cell.border    = THIN_BORDER;
   });
 
-  // ---- DATOS ----
+  // Datos
   const sorted = [...scheduleData].sort((a, b) => {
-    const keyA = String(a.cedula || a.nombre || "");
-    const keyB = String(b.cedula || b.nombre || "");
-    if (keyA < keyB) return -1;
-    if (keyA > keyB) return 1;
+    const kA = String(a.cedula || a.nombre || "");
+    const kB = String(b.cedula || b.nombre || "");
+    if (kA < kB) return -1; if (kA > kB) return 1;
     return (a.fecha || "").localeCompare(b.fecha || "");
   });
 
   sorted.forEach((turno, idx) => {
-    const row = sheet.getRow(2 + idx);
+    const row  = sheet.getRow(2 + idx);
+    row.height = 18;
 
-    // Jornada con formato Prometeo correcto (sin D 1h)
-    const jornada = buildJornadaPrometeo(turno);
+    const isDescanso    = turno.esDescanso === true;
+    const isIncapacidad = turno.esIncapacidad === true;
+    const isSplit       = turno.esSplit === true;
+    const jornada       = buildJornadaPrometeo(turno);
 
-    // C1 - Cédula
+    let rowFill = idx % 2 === 0 ? ROW_FILL_ODD : ROW_FILL_EVEN;
+    if (isDescanso)    rowFill = FILL_DESCANSO;
+    if (isSplit)       rowFill = FILL_SPLIT;
+    if (isIncapacidad) rowFill = FILL_INCAPACIDAD;
+
+    const applyCell = (cell, align = ALIGN_CENTER) => {
+      cell.font = FONT_PROMETEO; cell.fill = rowFill;
+      cell.alignment = align;   cell.border = THIN_BORDER;
+    };
+
     const cedCell = row.getCell(1);
-    cedCell.value     = cedulaNum(turno.cedula);
-    cedCell.font      = FONT_PROMETEO;
-    cedCell.alignment = ALIGN_LEFT;
+    cedCell.value = cedulaNum(turno.cedula);
+    applyCell(cedCell, ALIGN_RIGHT);
 
-    // C2 - Nombre
     const nomCell = row.getCell(2);
     nomCell.value = turno._nombreCompleto || (turno.nombre || "").toUpperCase();
+    applyCell(nomCell, ALIGN_LEFT);
 
-    // C3 - Contrato
     const conCell = row.getCell(3);
     conCell.value = turno.contrato || metadata?.contrato || "";
+    applyCell(conCell, ALIGN_LEFT);
 
-    // C4 - Jornada (formato correcto: "7:42:00 a. m. - 6:00:00 p. m.")
     const jorCell = row.getCell(4);
     jorCell.value = jornada;
+    applyCell(jorCell, ALIGN_CENTER);
+    if (isDescanso)    jorCell.font = { ...FONT_PROMETEO, color: { argb: "FF375623" }, italic: true };
+    if (isIncapacidad) jorCell.font = { ...FONT_PROMETEO, color: { argb: "FFC00000" }, bold: true };
+    if (isSplit)       jorCell.font = { ...FONT_PROMETEO, color: { argb: "FF7F6000" }, bold: true };
 
-    // C5 - Fecha
     const fechaCell = row.getCell(5);
     fechaCell.value  = parseFecha(turno.fecha);
-    fechaCell.numFmt = "mm-dd-yy";
-    fechaCell.font   = FONT_PROMETEO;
+    fechaCell.numFmt = "dd/mm/yyyy";
+    applyCell(fechaCell);
 
-    // C6 - Lider
     const lidCell = row.getCell(6);
     lidCell.value = (metadata?.lider || metadata?.supervisor || "").toUpperCase();
+    applyCell(lidCell, ALIGN_LEFT);
   });
 
   sheet.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
-  sheet.properties = { defaultRowHeight: 14.5 };
+  sheet.properties = { defaultRowHeight: 18 };
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colsProg.length } };
 
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 module.exports = { generateFormatoTurnos, generatePlantillaPrometeo };
