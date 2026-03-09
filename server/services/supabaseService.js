@@ -22,13 +22,6 @@ const BUCKETS = {
 // FUNCIONES DE STORAGE
 // ============================================
 
-/**
- * Sube una imagen a Supabase Storage
- * @param {Buffer} buffer - Buffer de la imagen
- * @param {string} fileName - Nombre del archivo
- * @param {string} contentType - MIME type
- * @returns {Promise<string>} - Ruta del archivo en storage
- */
 async function subirImagen(buffer, fileName, contentType) {
   if (!supabase) throw new Error("Supabase no configurado");
 
@@ -44,16 +37,9 @@ async function subirImagen(buffer, fileName, contentType) {
     });
 
   if (error) throw new Error(`Error subiendo imagen: ${error.message}`);
-
   return data.path;
 }
 
-/**
- * Sube un archivo Excel a Supabase Storage
- * @param {Buffer} buffer - Buffer del archivo Excel
- * @param {string} fileName - Nombre del archivo
- * @returns {Promise<string>} - Ruta del archivo en storage
- */
 async function subirExcel(buffer, fileName) {
   if (!supabase) throw new Error("Supabase no configurado");
 
@@ -70,40 +56,21 @@ async function subirExcel(buffer, fileName) {
     });
 
   if (error) throw new Error(`Error subiendo Excel: ${error.message}`);
-
   return data.path;
 }
 
-/**
- * Obtiene URL pública de descarga de un archivo
- * @param {string} bucket - Nombre del bucket
- * @param {string} path - Ruta del archivo
- * @returns {string} - URL pública
- */
 function obtenerUrlPublica(bucket, path) {
   if (!supabase) throw new Error("Supabase no configurado");
-
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-
   return data.publicUrl;
 }
 
-/**
- * Obtiene URL firmada (signed) para descarga de un archivo privado
- * @param {string} bucket - Nombre del bucket
- * @param {string} path - Ruta del archivo
- * @param {number} expiresIn - Segundos de validez (default: 1 hora)
- * @returns {Promise<string>} - URL firmada
- */
 async function obtenerUrlFirmada(bucket, path, expiresIn = 3600) {
   if (!supabase) throw new Error("Supabase no configurado");
-
   const { data, error } = await supabase.storage
     .from(bucket)
     .createSignedUrl(path, expiresIn);
-
   if (error) throw new Error(`Error obteniendo URL firmada: ${error.message}`);
-
   return data.signedUrl;
 }
 
@@ -111,11 +78,6 @@ async function obtenerUrlFirmada(bucket, path, expiresIn = 3600) {
 // FUNCIONES DE HISTORIAL
 // ============================================
 
-/**
- * Guarda un nuevo análisis en el historial
- * @param {Object} analisisData - Datos del análisis
- * @returns {Promise<Object>} - Registro creado
- */
 async function guardarAnalisis(analisisData) {
   if (!supabase) throw new Error("Supabase no configurado");
 
@@ -147,16 +109,10 @@ async function guardarAnalisis(analisisData) {
     .single();
 
   if (error) throw new Error(`Error guardando análisis: ${error.message}`);
-
   console.log(`✅ Análisis guardado en historial: ${data.id}`);
   return data;
 }
 
-/**
- * Obtiene el historial de análisis (los más recientes primero)
- * @param {number} limit - Número de registros a retornar
- * @returns {Promise<Array>} - Lista de análisis
- */
 async function obtenerHistorial(limit = 20) {
   if (!supabase) return [];
 
@@ -171,7 +127,6 @@ async function obtenerHistorial(limit = 20) {
     return [];
   }
 
-  // Agregar URLs públicas a cada análisis
   return data.map((analisis) => ({
     ...analisis,
     imagenes_urls: analisis.imagenes_paths?.map((path) =>
@@ -186,11 +141,6 @@ async function obtenerHistorial(limit = 20) {
   }));
 }
 
-/**
- * Obtiene un análisis específico por ID
- * @param {string} id - UUID del análisis
- * @returns {Promise<Object>} - Análisis con URLs
- */
 async function obtenerAnalisisPorId(id) {
   if (!supabase) throw new Error("Supabase no configurado");
 
@@ -216,14 +166,9 @@ async function obtenerAnalisisPorId(id) {
   };
 }
 
-/**
- * Elimina un análisis del historial (y sus archivos)
- * @param {string} id - UUID del análisis
- */
 async function eliminarAnalisis(id) {
   if (!supabase) throw new Error("Supabase no configurado");
 
-  // Obtener datos del análisis para eliminar archivos
   const { data: analisis } = await supabase
     .from("analisis_historial")
     .select("*")
@@ -231,14 +176,12 @@ async function eliminarAnalisis(id) {
     .single();
 
   if (analisis) {
-    // Eliminar imágenes
     if (analisis.imagenes_paths && analisis.imagenes_paths.length > 0) {
       await supabase.storage
         .from(BUCKETS.IMAGENES)
         .remove(analisis.imagenes_paths);
     }
 
-    // Eliminar Excels
     const excelPaths = [
       analisis.formato_turnos_path,
       analisis.plantilla_prometeo_path,
@@ -249,31 +192,101 @@ async function eliminarAnalisis(id) {
     }
   }
 
-  // Eliminar registro de la base de datos
   const { error } = await supabase
     .from("analisis_historial")
     .delete()
     .eq("id", id);
 
   if (error) throw new Error(`Error eliminando análisis: ${error.message}`);
-
   console.log(`✅ Análisis eliminado: ${id}`);
 }
 
 // ============================================
-// FUNCIONES DE AGENTES (mantener las existentes)
+// NORMALIZACIÓN DE NOMBRES (mejorada para nombres colombianos)
+// ============================================
+
+/**
+ * Normaliza un nombre para comparación:
+ * - Quita acentos, pasa a mayúsculas, elimina caracteres especiales
+ */
+function normalizarNombre(nombre) {
+  return String(nombre || "")
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
+    .replace(/[^A-Z\s]/g, "")         // solo letras y espacios
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Extrae palabras significativas (más de 2 caracteres, no preposiciones)
+ */
+const PREPOSICIONES = new Set(["DE", "DEL", "LA", "LAS", "LOS", "EL", "Y", "E"]);
+
+function palabrasSignificativas(nombre) {
+  return normalizarNombre(nombre)
+    .split(" ")
+    .filter(p => p.length > 2 && !PREPOSICIONES.has(p));
+}
+
+/**
+ * Calcula score de similitud entre nombre extraído y nombre en BD.
+ * Retorna valor entre 0 y 1.
+ *
+ * Estrategia mejorada para nombres colombianos compuestos:
+ * - "JESUS MAGALLANES" debe encontrar "MARCIAL DE JESUS MAGALLANES"
+ * - "DANIEL PIÑEROS" debe encontrar "DANIEL PIÑEROS RAMIREZ"
+ * - "LEX LILIANA RIOS" debe encontrar "ALEX LILIANA RIOS" (variaciones de primer nombre)
+ */
+function calcularSimilitud(nombreExtraido, nombreBD) {
+  const palabrasQuery = palabrasSignificativas(nombreExtraido);
+  const palabrasBD = palabrasSignificativas(nombreBD);
+
+  if (!palabrasQuery.length || !palabrasBD.length) return 0;
+
+  // Contar cuántas palabras del query están en el nombre de BD
+  let coincidencias = 0;
+  for (const pq of palabrasQuery) {
+    // Buscar coincidencia exacta O que el nombre BD contenga la palabra como substring
+    if (palabrasBD.some(pb => pb === pq || pb.startsWith(pq) || pq.startsWith(pb))) {
+      coincidencias++;
+    }
+  }
+
+  // Score base: proporción de palabras del query que coinciden
+  const scoreQuery = coincidencias / palabrasQuery.length;
+
+  // Bonus si el apellido (última palabra del query) está en el nombre BD
+  const apellidoQuery = palabrasQuery[palabrasQuery.length - 1];
+  const apellidoBD = palabrasBD[palabrasBD.length - 1];
+  const apellidoCoincide = apellidoBD === apellidoQuery ||
+    palabrasBD.some(p => p === apellidoQuery);
+
+  // Requerir mínimo: apellido coincide O al menos 2 palabras coinciden
+  if (!apellidoCoincide && coincidencias < 2) return 0;
+
+  // Si el apellido coincide, dar bonus adicional
+  const bonus = apellidoCoincide ? 0.2 : 0;
+
+  return Math.min(1, scoreQuery + bonus);
+}
+
+// ============================================
+// FUNCIONES DE AGENTES
 // ============================================
 
 /**
  * Busca un agente por nombre parcial (como aparece en la imagen)
- * Usa múltiples estrategias: alias exacto, similitud, contención
+ * Usa múltiples estrategias optimizadas para nombres colombianos compuestos
  */
 async function buscarAgentePorNombre(nombreParcial) {
   if (!supabase || !nombreParcial) return null;
 
   const nombreLimpio = nombreParcial.trim();
+  const nombreNorm = normalizarNombre(nombreLimpio);
 
-  // 1. Búsqueda exacta en alias
+  // 1. Búsqueda exacta en alias (case-insensitive)
   const { data: aliasMatch } = await supabase
     .from("agentes_alias")
     .select("agente_id")
@@ -289,14 +302,12 @@ async function buscarAgentePorNombre(nombreParcial) {
       .single();
 
     if (agente) {
-      console.log(
-        `  ✅ Match por alias: "${nombreLimpio}" → ${agente.nombre} (${agente.cedula})`
-      );
+      console.log(`  ✅ Match por alias: "${nombreLimpio}" → ${agente.nombre} (${agente.cedula})`);
       return agente;
     }
   }
 
-  // 2. Búsqueda por contención en nombre completo (ILIKE)
+  // 2. Búsqueda por contención exacta en nombre completo
   const { data: containMatch } = await supabase
     .from("agentes")
     .select("*")
@@ -305,61 +316,89 @@ async function buscarAgentePorNombre(nombreParcial) {
     .limit(1);
 
   if (containMatch && containMatch.length > 0) {
-    console.log(
-      `  ✅ Match por contención: "${nombreLimpio}" → ${containMatch[0].nombre} (${containMatch[0].cedula})`
-    );
+    console.log(`  ✅ Match por contención: "${nombreLimpio}" → ${containMatch[0].nombre} (${containMatch[0].cedula})`);
     return containMatch[0];
   }
 
-  // 3. Búsqueda por palabras individuales (al menos 2 palabras coinciden)
-  const palabras = nombreLimpio.split(/\s+/).filter((p) => p.length > 2);
-  if (palabras.length >= 2) {
-    const { data: allAgentes } = await supabase
-      .from("agentes")
-      .select("*")
-      .eq("activo", true);
+  // 3. Búsqueda inteligente: cargar todos los agentes y calcular similitud
+  // (solo cuando los métodos rápidos fallan)
+  const { data: allAgentes } = await supabase
+    .from("agentes")
+    .select("*")
+    .eq("activo", true);
 
-    if (allAgentes) {
-      let bestMatch = null;
-      let bestScore = 0;
+  if (allAgentes && allAgentes.length > 0) {
+    let bestMatch = null;
+    let bestScore = 0;
 
-      for (const agente of allAgentes) {
-        const nombreAgente = agente.nombre.toLowerCase();
-        let score = 0;
-        for (const palabra of palabras) {
-          if (nombreAgente.includes(palabra.toLowerCase())) {
-            score++;
-          }
-        }
-        if (score > bestScore && score >= 2) {
-          bestScore = score;
-          bestMatch = agente;
-        }
+    for (const agente of allAgentes) {
+      const score = calcularSimilitud(nombreLimpio, agente.nombre);
+
+      if (score > bestScore && score >= 0.5) {
+        bestScore = score;
+        bestMatch = agente;
       }
+    }
 
-      if (bestMatch) {
-        console.log(
-          `  ✅ Match por palabras (${bestScore}/${palabras.length}): "${nombreLimpio}" → ${bestMatch.nombre} (${bestMatch.cedula})`
-        );
-        return bestMatch;
+    if (bestMatch) {
+      console.log(
+        `  ✅ Match por similitud (${(bestScore * 100).toFixed(0)}%): "${nombreLimpio}" → ${bestMatch.nombre} (${bestMatch.cedula})`
+      );
+      return bestMatch;
+    }
+
+    // 4. Último recurso: buscar por apellido único si solo hay un agente con ese apellido
+    const palabras = palabrasSignificativas(nombreLimpio);
+    if (palabras.length >= 1) {
+      const apellido = palabras[palabras.length - 1];
+      if (apellido.length > 3) {
+        const { data: apellidoMatch } = await supabase
+          .from("agentes")
+          .select("*")
+          .eq("activo", true)
+          .ilike("nombre", `%${apellido}%`);
+
+        if (apellidoMatch && apellidoMatch.length === 1) {
+          console.log(
+            `  ✅ Match por apellido único: "${nombreLimpio}" → ${apellidoMatch[0].nombre} (${apellidoMatch[0].cedula})`
+          );
+          return apellidoMatch[0];
+        }
       }
     }
   }
 
-  // 4. Búsqueda por apellido (última palabra del nombre parcial)
-  const apellido = palabras[palabras.length - 1];
-  if (apellido && apellido.length > 3) {
-    const { data: apellidoMatch } = await supabase
-      .from("agentes")
-      .select("*")
-      .eq("activo", true)
-      .ilike("nombre", `%${apellido}%`);
+  // También buscar en alias con similitud
+  const { data: allAlias } = await supabase
+    .from("agentes_alias")
+    .select("agente_id, alias");
 
-    if (apellidoMatch && apellidoMatch.length === 1) {
-      console.log(
-        `  ✅ Match por apellido único: "${nombreLimpio}" → ${apellidoMatch[0].nombre} (${apellidoMatch[0].cedula})`
-      );
-      return apellidoMatch[0];
+  if (allAlias && allAlias.length > 0) {
+    let bestAliasMatch = null;
+    let bestAliasScore = 0;
+
+    for (const aliasEntry of allAlias) {
+      const score = calcularSimilitud(nombreLimpio, aliasEntry.alias);
+      if (score > bestAliasScore && score >= 0.6) {
+        bestAliasScore = score;
+        bestAliasMatch = aliasEntry;
+      }
+    }
+
+    if (bestAliasMatch) {
+      const { data: agente } = await supabase
+        .from("agentes")
+        .select("*")
+        .eq("id", bestAliasMatch.agente_id)
+        .eq("activo", true)
+        .single();
+
+      if (agente) {
+        console.log(
+          `  ✅ Match por alias similitud (${(bestAliasScore * 100).toFixed(0)}%): "${nombreLimpio}" → ${agente.nombre} (${agente.cedula})`
+        );
+        return agente;
+      }
     }
   }
 
@@ -427,9 +466,7 @@ async function obtenerAgentesPorCampana(campana) {
  */
 async function enriquecerTurnos(turnos, metadata) {
   if (!supabase) {
-    console.log(
-      "⚠️  Supabase no configurado, retornando turnos sin enriquecer"
-    );
+    console.log("⚠️  Supabase no configurado, retornando turnos sin enriquecer");
     return {
       turnos,
       metadata,
@@ -437,9 +474,7 @@ async function enriquecerTurnos(turnos, metadata) {
     };
   }
 
-  console.log(
-    `🔍 Enriqueciendo ${turnos.length} turnos con datos de Supabase...`
-  );
+  console.log(`🔍 Enriqueciendo ${turnos.length} turnos con datos de Supabase...`);
 
   // Cache para no buscar el mismo nombre dos veces
   const cache = new Map();
@@ -452,14 +487,14 @@ async function enriquecerTurnos(turnos, metadata) {
     const nombreOriginal = turno.nombre || "";
     const cedulaOriginal = turno.cedula || "";
 
-    // Intentar buscar primero por cédula si la tiene
     let agente = null;
 
+    // Intentar buscar primero por cédula si la tiene
     if (cedulaOriginal && cedulaOriginal !== "???") {
       agente = await buscarAgentePorCedula(cedulaOriginal);
     }
 
-    // Si no encontró por cédula, buscar por nombre
+    // Si no encontró por cédula, buscar por nombre (con cache)
     if (!agente && nombreOriginal) {
       const cacheKey = nombreOriginal.toLowerCase().trim();
       if (cache.has(cacheKey)) {
@@ -477,8 +512,7 @@ async function enriquecerTurnos(turnos, metadata) {
         cedula: agente.cedula,
         nombre: agente.nombre,
         campana: turno.campana || agente.campana,
-        contrato:
-          turno.contrato || agente.contrato || metadata?.contrato || "",
+        contrato: turno.contrato || agente.contrato || metadata?.contrato || "",
         _nombreOriginal: nombreOriginal,
         _matchedFromDB: true,
       });
@@ -551,7 +585,6 @@ async function actualizarAgente(id, updates) {
 async function eliminarAgente(id) {
   if (!supabase) throw new Error("Supabase no configurado");
 
-  // Soft delete
   const { error } = await supabase
     .from("agentes")
     .update({ activo: false })
@@ -589,46 +622,64 @@ async function obtenerAliases(agenteId) {
 
 /**
  * Genera alias automáticos a partir del nombre completo
- * Ej: "MARCIAL DE JESUS MAGALLANES" → ["Jesus Magallanes", "Marcial Magallanes", "Magallanes"]
+ * Ej: "MARCIAL DE JESUS MAGALLANES" → ["Jesus Magallanes", "Marcial Magallanes", "Magallanes", "Marcial Magallanes"]
+ * Mejorado para nombres colombianos con múltiples palabras
  */
 async function generarAliasAutomaticos(agenteId, nombreCompleto) {
   if (!supabase) return;
 
   const palabras = nombreCompleto
     .split(/\s+/)
-    .filter(
-      (p) =>
-        !["DE", "DEL", "LA", "LAS", "LOS"].includes(p.toUpperCase())
-    );
+    .filter(p => !PREPOSICIONES.has(p.toUpperCase()) && p.length > 1);
 
   const aliases = new Set();
 
   // Nombre completo tal cual
   aliases.add(nombreCompleto);
+  aliases.add(nombreCompleto.toLowerCase());
 
-  // Si tiene más de 2 palabras, combinaciones útiles
   if (palabras.length >= 2) {
     const apellido = palabras[palabras.length - 1];
+    const primerNombre = palabras[0];
 
     // Primera palabra + último apellido
-    aliases.add(`${palabras[0]} ${apellido}`);
+    aliases.add(`${primerNombre} ${apellido}`);
+    aliases.add(`${primerNombre} ${apellido}`.toLowerCase());
 
-    // Si tiene 3+ palabras: segunda palabra + apellido
+    // Combinaciones útiles para nombres compuestos (colombianos)
     if (palabras.length >= 3) {
-      aliases.add(`${palabras[1]} ${apellido}`);
+      // Segunda palabra + apellido (ej: "JESUS MAGALLANES" de "MARCIAL DE JESUS MAGALLANES")
+      const segundaNombre = palabras[1];
+      aliases.add(`${segundaNombre} ${apellido}`);
+      aliases.add(`${segundaNombre} ${apellido}`.toLowerCase());
+
+      // Tercera palabra + apellido si existe
+      if (palabras.length >= 4) {
+        const terceraNombre = palabras[2];
+        aliases.add(`${terceraNombre} ${apellido}`);
+      }
     }
 
     // Solo apellido (si es único/largo)
     if (apellido.length > 4) {
       aliases.add(apellido);
     }
+
+    // Penúltima + última palabra (apellidos compuestos)
+    if (palabras.length >= 2) {
+      const penultima = palabras[palabras.length - 2];
+      if (!PREPOSICIONES.has(penultima.toUpperCase()) && penultima.length > 2) {
+        aliases.add(`${penultima} ${apellido}`);
+      }
+    }
   }
 
   for (const alias of aliases) {
+    if (!alias || alias.trim().length < 3) continue;
     try {
       await supabase
         .from("agentes_alias")
-        .insert({ agente_id: agenteId, alias })
+        .insert({ agente_id: agenteId, alias: alias.trim() })
         .select();
     } catch (e) {
       // Ignorar duplicados
@@ -641,10 +692,7 @@ async function generarAliasAutomaticos(agenteId, nombreCompleto) {
  */
 async function verificarConexion() {
   if (!supabase)
-    return {
-      connected: false,
-      reason: "Variables de entorno no configuradas",
-    };
+    return { connected: false, reason: "Variables de entorno no configuradas" };
 
   try {
     const { data, error } = await supabase
@@ -672,19 +720,19 @@ module.exports = {
   agregarAlias,
   obtenerAliases,
   verificarConexion,
-  
+
   // Funciones de storage
   subirImagen,
   subirExcel,
   obtenerUrlPublica,
   obtenerUrlFirmada,
-  
+
   // Funciones de historial
   guardarAnalisis,
   obtenerHistorial,
   obtenerAnalisisPorId,
   eliminarAnalisis,
-  
+
   // Constantes
   BUCKETS,
 };

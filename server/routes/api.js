@@ -1,5 +1,7 @@
 const express = require("express");
 const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 const { analyzeScheduleImages } = require("../services/claudeService");
 const {
   generateFormatoTurnos,
@@ -114,53 +116,67 @@ router.post("/generate", async (req, res) => {
     const formatoBuffer = await generateFormatoTurnos(scheduleData, metadata);
     const plantillaBuffer = await generatePlantillaPrometeo(scheduleData, metadata);
 
-    // 2. Subir a Supabase Storage
-    console.log("📤 Subiendo archivos Excel a Supabase Storage...");
+    const timestamp = Date.now();
+    const formatoName = `Formato_Turnos_Programados_${timestamp}.xlsx`;
+    const plantillaName = `Plantilla_Programacion_Turnos_Prometeo_${timestamp}.xlsx`;
 
-    const formatoTurnosPath = await subirExcel(
-      formatoBuffer,
-      "Formato_Turnos_Programados.xlsx"
-    );
+    let files = {};
+    let analisisId = null;
 
-    const plantillaPrometeoPath = await subirExcel(
-      plantillaBuffer,
-      "Plantilla_Programacion_Turnos_Prometeo.xlsx"
-    );
+    // 2. Intentar subir a Supabase; si falla, guardar localmente
+    try {
+      console.log("📤 Subiendo archivos Excel a Supabase Storage...");
+      const formatoTurnosPath = await subirExcel(formatoBuffer, formatoName);
+      const plantillaPrometeoPath = await subirExcel(plantillaBuffer, plantillaName);
 
-    // 3. Calcular estadísticas
-    const agentes = new Set(scheduleData.map((t) => t.cedula)).size;
-    const descansos = scheduleData.filter((t) => t.esDescanso).length;
-    const splits = scheduleData.filter((t) => t.esSplit).length;
-
-    const stats = {
-      agentes,
-      total: scheduleData.length,
-      descansos,
-      splits,
-    };
-
-    // 4. Guardar en historial
-    const analisisGuardado = await guardarAnalisis({
-      metadata,
-      imagenesPaths: imagenesPaths || [],
-      formatoTurnosPath,
-      plantillaPrometeoPath,
-      stats,
-    });
-
-    console.log("✅ Archivos generados y guardados en Supabase");
-
-    // 5. Obtener URLs públicas para respuesta
-    const { obtenerUrlPublica, BUCKETS } = require("../services/supabaseService");
-
-    res.json({
-      success: true,
-      analisisId: analisisGuardado.id,
-      files: {
+      const { obtenerUrlPublica, BUCKETS } = require("../services/supabaseService");
+      files = {
         formato: obtenerUrlPublica(BUCKETS.EXCELS, formatoTurnosPath),
         plantilla: obtenerUrlPublica(BUCKETS.EXCELS, plantillaPrometeoPath),
-      },
-    });
+      };
+
+      // Guardar en historial
+      try {
+        const agentes = new Set(scheduleData.map((t) => t.cedula)).size;
+        const analisisGuardado = await guardarAnalisis({
+          metadata,
+          imagenesPaths: imagenesPaths || [],
+          formatoTurnosPath,
+          plantillaPrometeoPath,
+          stats: {
+            agentes,
+            total: scheduleData.length,
+            descansos: scheduleData.filter((t) => t.esDescanso).length,
+            splits: scheduleData.filter((t) => t.esSplit).length,
+          },
+        });
+        analisisId = analisisGuardado?.id || null;
+        console.log("✅ Archivos generados y guardados en Supabase");
+      } catch (historialError) {
+        console.warn("⚠️  Error guardando historial (continuando):", historialError.message);
+      }
+    } catch (supabaseError) {
+      console.warn("⚠️  Supabase no disponible, guardando archivos localmente:", supabaseError.message);
+
+      // Guardar en carpeta temp local
+      const tempDir = path.join(__dirname, "..", "temp");
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      fs.writeFileSync(path.join(tempDir, formatoName), formatoBuffer);
+      fs.writeFileSync(path.join(tempDir, plantillaName), plantillaBuffer);
+
+      const baseUrl = `http://localhost:${process.env.PORT || 3001}`;
+      files = {
+        formato: `${baseUrl}/downloads/${formatoName}`,
+        plantilla: `${baseUrl}/downloads/${plantillaName}`,
+      };
+
+      console.log("✅ Archivos generados y guardados localmente en /temp");
+    }
+
+    res.json({ success: true, analisisId, files });
   } catch (error) {
     console.error("❌ Error generando Excel:", error.message);
     res.status(500).json({ error: error.message });

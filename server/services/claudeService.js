@@ -1,12 +1,13 @@
 const Anthropic = require("@anthropic-ai/sdk");
 const { enriquecerTurnos } = require("./supabaseService");
+const { enriquecerLocal } = require("./localAgentsService");
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 /**
- * Analiza una o múltiples imágenes de maya horaria usando Claude Vision (Opus 4.6 con pensamiento extendido)
+ * Analiza una o múltiples imágenes de maya horaria usando Claude Vision (Sonnet - más económico)
  * Extrae: agentes, cédulas, campaña, supervisor, horarios por día, almuerzos
  * Luego enriquece con datos de Supabase (cédulas, nombres completos, etc.)
  */
@@ -194,7 +195,7 @@ DEBES responder ÚNICAMENTE con un JSON válido (sin markdown, sin backticks, si
 13. Las FECHAS deben calcularse a partir de los números de día visibles en las columnas de la imagen y el mes/año actual
 14. Si S o D en turno partido muestra horario continuo (ej: "2:00 PM - 10:00 PM"), ese turno NO es split, es normal (esSplit=false)
 15. Almuerzo para turnos de fin de semana de 8 horas o menos: null (no aplica)
-16. NO incluir notas de apoyo como agentes (ej: "Apoyo línea Eliana" no es un agente)
+16. NO incluir notas de apoyo como agentes (ej: "Apoyo línea Eliana" no es un agente con turno asignado)
 17. Los agentes en la sección regular trabajan L-V con su horario base a menos que se indique lo contrario
 18. Para estados como Incapacidad: esIncapacidad=true, motivoAusencia="Incapacidad", esDescanso=false`;
 
@@ -250,16 +251,12 @@ NO incluyas como agentes las notas de apoyo (ej: "Apoyo línea Eliana de 7:00 am
 IMPORTANTE: Responde SOLO con el JSON, sin ningún texto adicional, sin backticks de markdown.`,
   });
 
-  console.log("🧠 Usando Claude Opus 4.6 con pensamiento extendido (streaming)...");
+  console.log("🧠 Usando Claude Sonnet (optimizado para reducir costos)...");
 
-  // Usar streaming para evitar timeout en operaciones largas con Opus 4.6
-  const stream = await client.messages.stream({
-    model: "claude-opus-4-6",
-    max_tokens: 64000,
-    thinking: {
-      type: "enabled",
-      budget_tokens: 20000,
-    },
+  // Usar Sonnet en lugar de Opus para reducir costos significativamente
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-5",
+    max_tokens: 16000,
     messages: [
       {
         role: "user",
@@ -269,25 +266,17 @@ IMPORTANTE: Responde SOLO con el JSON, sin ningún texto adicional, sin backtick
     system: systemPrompt,
   });
 
-  // Recopilar la respuesta completa del stream
-  const response = await stream.finalMessage();
-
-  // Extraer el texto de la respuesta (ignorar bloques de pensamiento)
+  // Extraer el texto de la respuesta
   const responseText = response.content
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("");
 
-  // Log thinking summary if available
-  const thinkingBlocks = response.content.filter((block) => block.type === "thinking");
-  if (thinkingBlocks.length > 0) {
-    const thinkingLength = thinkingBlocks.reduce((acc, b) => acc + (b.thinking || "").length, 0);
-    console.log(`🧠 Pensamiento extendido: ${thinkingLength} caracteres de razonamiento`);
-  }
-
   // Log token usage
   if (response.usage) {
     console.log(`📊 Tokens usados: input=${response.usage.input_tokens}, output=${response.usage.output_tokens}`);
+    const costEstimate = ((response.usage.input_tokens * 3 + response.usage.output_tokens * 15) / 1_000_000).toFixed(4);
+    console.log(`💰 Costo estimado: ~$${costEstimate} USD`);
   }
 
   // Limpiar posibles backticks de markdown
@@ -399,34 +388,63 @@ IMPORTANTE: Responde SOLO con el JSON, sin ningún texto adicional, sin backtick
   }
 
   // ============================================
-  // ENRIQUECIMIENTO CON SUPABASE
+  // ENRIQUECIMIENTO: Supabase → fallback local M_Excel
   // ============================================
-  console.log("🔗 Cruzando datos con base de datos Supabase...");
 
+  let enriched = null;
+
+  // 1. Intentar Supabase
   try {
-    const enriched = await enriquecerTurnos(
+    console.log("🔗 Cruzando datos con base de datos Supabase...");
+    enriched = await enriquecerTurnos(
       parsedData.turnos || [],
       parsedData.metadata || {}
     );
-
-    parsedData.turnos = enriched.turnos;
-    parsedData.metadata = enriched.metadata;
-    parsedData.matchStats = enriched.matchStats;
-
     console.log(
-      `📊 Resultado: ${enriched.matchStats.matched}/${enriched.matchStats.total} agentes identificados desde BD`
+      `📊 Resultado Supabase: ${enriched.matchStats.matched}/${enriched.matchStats.total} agentes identificados`
     );
-  } catch (enrichError) {
+  } catch (supabaseError) {
     console.warn(
-      "⚠️  Error enriqueciendo datos (continuando sin enriquecer):",
-      enrichError.message
+      "⚠️  Supabase no disponible, usando catálogo local M_Excel...",
+      supabaseError.message
     );
-    parsedData.matchStats = {
-      total: parsedData.turnos?.length || 0,
-      matched: 0,
-      unmatched: parsedData.turnos?.length || 0,
-    };
   }
+
+  // 2. Si Supabase falló o no completó todos los agentes, usar catálogo local
+  if (!enriched || enriched.matchStats.matched === 0) {
+    try {
+      enriched = await enriquecerLocal(
+        parsedData.turnos || [],
+        parsedData.metadata || {}
+      );
+    } catch (localError) {
+      console.warn("⚠️  Error en enriquecimiento local:", localError.message);
+      enriched = {
+        turnos: parsedData.turnos || [],
+        metadata: parsedData.metadata || {},
+        matchStats: {
+          total: parsedData.turnos?.length || 0,
+          matched: 0,
+          unmatched: parsedData.turnos?.length || 0,
+        },
+      };
+    }
+  } else if (enriched.matchStats.unmatched > 0) {
+    // Supabase completó parcialmente → completar faltantes con catálogo local
+    try {
+      const localEnriched = await enriquecerLocal(enriched.turnos, enriched.metadata);
+      enriched.turnos = localEnriched.turnos;
+      const totalMatched = enriched.matchStats.matched + localEnriched.matchStats.matched;
+      enriched.matchStats = { ...enriched.matchStats, matched: totalMatched };
+      console.log(`📊 Tras catálogo local: ${totalMatched}/${enriched.matchStats.total} total identificados`);
+    } catch (e) {
+      // Ignorar, quedarse con lo de Supabase
+    }
+  }
+
+  parsedData.turnos = enriched.turnos;
+  parsedData.metadata = enriched.metadata;
+  parsedData.matchStats = enriched.matchStats;
 
   return parsedData;
 }
@@ -541,11 +559,14 @@ function normalizeTime(timeStr) {
 function normalizeAlmuerzo(almuerzoStr) {
   if (!almuerzoStr || almuerzoStr === "null" || almuerzoStr === "n/a" || almuerzoStr === "???") return null;
 
+  // Descartar placeholders literales que no contienen dígitos reales
+  if (!/\d/.test(almuerzoStr)) return null;
+
   // Intentar extraer las dos horas del rango
   const match = almuerzoStr.match(
     /(\d{1,2}):(\d{2})\s*(am|pm|a\.?\s*m\.?|p\.?\s*m\.?)?\s*-\s*(\d{1,2}):(\d{2})\s*(am|pm|a\.?\s*m\.?|p\.?\s*m\.?)?/i
   );
-  if (!match) return almuerzoStr;
+  if (!match) return null;
 
   let h1 = parseInt(match[1]);
   const m1 = parseInt(match[2]);
@@ -555,17 +576,14 @@ function normalizeAlmuerzo(almuerzoStr) {
   const m2 = parseInt(match[5]);
   const ampm2 = (match[6] || "").toLowerCase();
 
-  // Aplicar AM/PM si está presente
   if (ampm1.startsWith("p") && h1 < 12) h1 += 12;
   if (ampm1.startsWith("a") && h1 === 12) h1 = 0;
   if (ampm2.startsWith("p") && h2 < 12) h2 += 12;
   if (ampm2.startsWith("a") && h2 === 12) h2 = 0;
 
-  // Si no hay AM/PM, inferir para horas de almuerzo típicas
   if (!ampm1 && !ampm2) {
-    // Almuerzos típicos: 11:00-12:00, 12:00-13:00, 13:00-14:00, etc.
-    if (h1 >= 1 && h1 <= 6) h1 += 12; // 1:00 → 13:00
-    if (h2 >= 1 && h2 <= 6) h2 += 12; // 2:00 → 14:00
+    if (h1 >= 1 && h1 <= 6) h1 += 12;
+    if (h2 >= 1 && h2 <= 6) h2 += 12;
   }
 
   return `${String(h1).padStart(2, "0")}:${String(m1).padStart(2, "0")} - ${String(h2).padStart(2, "0")}:${String(m2).padStart(2, "0")}`;
@@ -595,7 +613,6 @@ function calcularDuracionAlmuerzo(almuerzoStr) {
   if (ampm2.includes("p") && h2 < 12) h2 += 12;
   if (ampm2.includes("a") && h2 === 12) h2 = 0;
 
-  // Si no hay AM/PM y las horas son bajas, asumir PM para horas 1-6
   if (!ampm1 && !ampm2) {
     if (h1 >= 1 && h1 <= 6 && h2 >= 1 && h2 <= 6) {
       h1 += 12;

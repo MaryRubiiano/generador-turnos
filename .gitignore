@@ -60,3 +60,7 @@ downloads/
 # Excel temporales
 ~$*.xlsx
 ~$*.xls
+
+# Datos sensibles / locales
+.claude/
+M_Excel/
