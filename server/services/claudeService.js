@@ -86,6 +86,12 @@ REGLA PARA SÁBADO Y DOMINGO:
 - Si están vacíos → es DESCANSO ese día
 - Si muestran "Descanso" → es DESCANSO
 
+REGLA CRÍTICA SOBRE DESCANSO EN DÍAS DE SEMANA (LUNES A VIERNES):
+- Los agentes NO descansan entre semana en condiciones normales.
+- Un día L-V solo puede ser DESCANSO si la imagen explícitamente indica "Descanso" en ese día O si es un día festivo (la imagen puede mostrarlo con texto como "Festivo", "Festivo/Descanso", o el espacio simplemente tiene indicación de festivo).
+- Si una columna L-V está vacía para un agente → NO es descanso, probablemente el nombre del agente está en otra columna o la celda es parte de un nombre expandido visualmente. Asume que trabaja esos días con el horario base.
+- NUNCA pongas esDescanso=true en días L-V a menos que la imagen lo indique explícita y claramente.
+
 === MANEJO DE INCAPACIDAD Y OTROS ESTADOS ESPECIALES ===
 
 IMPORTANTE: En las columnas de días pueden aparecer textos especiales en lugar de nombres o horarios:
@@ -181,7 +187,7 @@ DEBES responder ÚNICAMENTE con un JSON válido (sin markdown, sin backticks, si
 === REGLAS DE FORMATO ===
 
 1. Horas en formato 24h (HH:MM): "7:00 AM" → "07:00", "5:18 PM" → "17:18", "6:00 PM" → "18:00", "10:00 PM" → "22:00", "5:30 PM" → "17:30", "2:00 PM" → "14:00"
-2. Descanso: esDescanso=true, esIncapacidad=false, motivoAusencia=null, horaInicio=null, horaFin=null, jornada="DESCANSO"
+2. Descanso: esDescanso=true, esIncapacidad=false, motivoAusencia=null, horaInicio=null, horaFin=null, jornada="DESCANSO". IMPORTANTE: Los descansos entre semana (L-V) solo ocurren si hay un día festivo o la imagen lo indica explícitamente. Normalmente el descanso es SOLO Sábado y/o Domingo.
 3. Incapacidad/ausencia: esDescanso=false, esIncapacidad=true, motivoAusencia="Incapacidad" (o el motivo real), horaInicio=null, horaFin=null, jornada="INCAPACIDAD"
 4. Turno split: esSplit=true, horaInicio/horaFin para primera franja, splitHoraInicio2/splitHoraFin2 para segunda franja, almuerzo=null
 5. Turno normal: esSplit=false, horaInicio y horaFin normales, almuerzo con formato "HH:MM - HH:MM" en 24h
@@ -242,7 +248,7 @@ PROCESO PASO A PASO:
    - S y D pueden ser turnos CONTINUOS (no split)
 6. Para cada agente encontrado, genera EXACTAMENTE 7 registros (uno por cada día de la semana)
 
-REGLA FUNDAMENTAL: Si un agente aparece asignado a un perfil de horario regular, trabaja L-V con el horario base (Ingreso/Salida/Almuerzo) de esa fila. NO pongas Descanso de Lunes a Viernes a menos que la imagen explícitamente indique que no trabaja esos días.
+REGLA FUNDAMENTAL: Si un agente aparece asignado a un perfil de horario regular, trabaja L-V con el horario base (Ingreso/Salida/Almuerzo) de esa fila. NO pongas Descanso de Lunes a Viernes a menos que la imagen explícitamente indique que es festivo o que el agente no trabaja ese día por razón específica. Los descansos normales son ÚNICAMENTE Sábado y Domingo. Si una celda de L-V está vacía, asume que el agente sí trabaja con su horario base.
 
 MANEJO DE INCAPACIDAD: Si ves "Incapacidad" en alguna columna de día para un agente, ese día marca: esIncapacidad=true, motivoAusencia="Incapacidad", esDescanso=false, jornada="INCAPACIDAD". Los demás días del agente que SÍ trabaja deben tener su horario normal.
 
